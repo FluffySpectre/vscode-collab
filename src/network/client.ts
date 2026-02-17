@@ -1,0 +1,181 @@
+import * as ws from "ws";
+import { EventEmitter } from "events";
+import {
+  Message,
+  MessageType,
+  WelcomePayload,
+  serialize,
+  deserialize,
+  createMessage,
+  HelloPayload,
+} from "./protocol";
+
+export interface ClientEvents {
+  connected: (welcome: WelcomePayload) => void;
+  disconnected: () => void;
+  message: (msg: Message) => void;
+  reconnecting: (attempt: number) => void;
+  error: (err: Error) => void;
+}
+
+export class CollabClient extends EventEmitter {
+  private socket: ws.WebSocket | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempts = 0;
+  private readonly MAX_RECONNECT_ATTEMPTS = 15;
+  private readonly RECONNECT_INTERVAL_MS = 2000;
+  private address: string = "";
+  private helloPayload: HelloPayload | null = null;
+  private intentionalDisconnect = false;
+
+  get isConnected(): boolean {
+    return this.socket !== null && this.socket.readyState === ws.OPEN;
+  }
+
+  // Connect
+
+  async connect(address: string, hello: HelloPayload): Promise<void> {
+    this.address = address;
+    this.helloPayload = hello;
+    this.intentionalDisconnect = false;
+
+    return this.doConnect();
+  }
+
+  private doConnect(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const url = `ws://${this.address}`;
+      this.socket = new ws.WebSocket(url);
+
+      const onOpen = () => {
+        this.reconnectAttempts = 0;
+        cleanup();
+
+        // Send Hello
+        if (this.helloPayload) {
+          this.send(createMessage(MessageType.Hello, this.helloPayload));
+        }
+
+        this.setupSocketListeners();
+        resolve();
+      };
+
+      const onError = (err: Error) => {
+        cleanup();
+        reject(err);
+      };
+
+      const cleanup = () => {
+        this.socket?.removeListener("open", onOpen);
+        this.socket?.removeListener("error", onError);
+      };
+
+      this.socket.on("open", onOpen);
+      this.socket.on("error", onError);
+    });
+  }
+
+  // Disconnect
+
+  disconnect(): void {
+    this.intentionalDisconnect = true;
+    this.stopReconnect();
+
+    if (this.socket) {
+      try {
+        this.send(createMessage(MessageType.Disconnect, {}));
+        this.socket.close();
+      } catch {
+        // ignore
+      }
+      this.socket = null;
+    }
+  }
+
+  // Send
+
+  send(msg: Message): void {
+    if (this.socket && this.socket.readyState === ws.OPEN) {
+      this.socket.send(serialize(msg));
+    }
+  }
+
+  // Socket Listeners
+
+  private setupSocketListeners(): void {
+    if (!this.socket) { return; }
+
+    this.socket.on("message", (data) => {
+      try {
+        const msg = deserialize(data.toString());
+
+        switch (msg.type) {
+          case MessageType.Welcome:
+            this.emit("connected", msg.payload as WelcomePayload);
+            break;
+
+          case MessageType.Ping:
+            this.send(createMessage(MessageType.Pong, {}));
+            break;
+
+          case MessageType.Disconnect:
+            this.intentionalDisconnect = true;
+            this.socket?.close();
+            this.emit("disconnected");
+            break;
+
+          case MessageType.Error:
+            this.emit("error", new Error((msg.payload as { message: string }).message));
+            break;
+
+          default:
+            this.emit("message", msg);
+            break;
+        }
+      } catch (err) {
+        this.emit("error", new Error(`Failed to parse message: ${err}`));
+      }
+    });
+
+    this.socket.on("close", () => {
+      this.socket = null;
+      if (!this.intentionalDisconnect) {
+        this.attemptReconnect();
+      } else {
+        this.emit("disconnected");
+      }
+    });
+
+    this.socket.on("error", (err) => {
+      this.emit("error", err);
+    });
+  }
+
+  // Reconnection
+
+  private attemptReconnect(): void {
+    if (this.reconnectAttempts >= this.MAX_RECONNECT_ATTEMPTS) {
+      this.emit("disconnected");
+      return;
+    }
+
+    this.reconnectAttempts++;
+    this.emit("reconnecting", this.reconnectAttempts);
+
+    this.reconnectTimer = setTimeout(async () => {
+      try {
+        await this.doConnect();
+      } catch {
+        this.attemptReconnect();
+      }
+    }, this.RECONNECT_INTERVAL_MS);
+  }
+
+  private stopReconnect(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.reconnectAttempts = 0;
+  }
+}

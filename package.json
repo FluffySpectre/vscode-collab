@@ -1,0 +1,80 @@
+{
+  "name": "vscode-collab",
+  "displayName": "Workspace Collaboration",
+  "description": "Real-time collaboration on a shared workspace over LAN. One host, one client",
+  "version": "1.0.0",
+  "publisher": "bjoernbosse",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "collab.startSession",
+        "title": "Collab: Start Hosting Session"
+      },
+      {
+        "command": "collab.stopSession",
+        "title": "Collab: Stop Hosting Session"
+      },
+      {
+        "command": "collab.joinSession",
+        "title": "Collab: Join Session"
+      },
+      {
+        "command": "collab.leaveSession",
+        "title": "Collab: Leave Session"
+      }
+    ],
+    "configuration": {
+      "title": "Workspace Collaboration",
+      "properties": {
+        "collab.port": {
+          "type": "number",
+          "default": 9876,
+          "description": "Port for the WebSocket server."
+        },
+        "collab.username": {
+          "type": "string",
+          "default": "",
+          "description": "Your display name."
+        },
+        "collab.highlightColor": {
+          "type": "string",
+          "default": "#00BFFF",
+          "description": "Color used for the remote collaborator's cursor and selection."
+        },
+        "collab.ignoredPatterns": {
+          "type": "array",
+          "default": [
+            "node_modules/**",
+            ".git/**",
+            "*.lock",
+            "out/**",
+            "dist/**"
+          ],
+          "description": "Glob patterns for files/folders excluded from sync."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts"
+  },
+  "dependencies": {
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@types/ws": "^8.5.10",
+    "typescript": "^5.3.3"
+  }
+}

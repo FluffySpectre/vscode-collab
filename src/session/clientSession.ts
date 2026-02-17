@@ -1,0 +1,238 @@
+import * as vscode from "vscode";
+import { CollabClient } from "../network/client";
+import {
+  Message,
+  MessageType,
+  HelloPayload,
+  WelcomePayload,
+  EditPayload,
+  FullSyncPayload,
+  CursorUpdatePayload,
+  FileCreatedPayload,
+  FileDeletedPayload,
+  FileRenamedPayload,
+  createMessage,
+} from "../network/protocol";
+import { DocumentSync } from "../sync/documentSync";
+import { CursorSync } from "../sync/cursorSync";
+import { FileOpsSync } from "../sync/fileOpsSync";
+import { StatusBar } from "../ui/statusBar";
+
+/**
+ * ClientSession manages the client-side lifecycle:
+ *  1. Connects to the host's WebSocket server
+ *  2. Sends Hello, receives Welcome
+ *  3. Receives initial FullSync for open files
+ *  4. Relays local edits to host and applies confirmed edits from host
+ */
+export class ClientSession implements vscode.Disposable {
+  private client: CollabClient;
+  private documentSync: DocumentSync | null = null;
+  private cursorSync: CursorSync | null = null;
+  private fileOpsSync: FileOpsSync | null = null;
+  private statusBar: StatusBar;
+  private disposables: vscode.Disposable[] = [];
+
+  private username: string;
+  private address: string = "";
+  private hostUsername: string = "";
+
+  constructor(statusBar: StatusBar) {
+    this.statusBar = statusBar;
+    this.client = new CollabClient();
+
+    const config = vscode.workspace.getConfiguration("collab");
+    this.username = config.get<string>("username") || this.getDefaultUsername();
+  }
+
+  // Connect
+
+  async connect(address: string): Promise<void> {
+    this.address = address;
+
+    const wsFolder = vscode.workspace.workspaceFolders?.[0];
+    if (!wsFolder) {
+      throw new Error("No workspace folder open.");
+    }
+
+    const hello: HelloPayload = {
+      username: this.username,
+      workspaceFolder: wsFolder.name,
+    };
+
+    // Setup event handlers before connecting
+    this.setupClientEvents();
+
+    // Connect to host
+    await this.client.connect(address, hello);
+  }
+
+  // Disconnect
+
+  disconnect(): void {
+    this.teardownSync();
+    this.client.disconnect();
+    this.statusBar.setDisconnected();
+    vscode.window.showInformationMessage("Disconnected from collaboration session.");
+  }
+
+  // Client Events
+
+  private setupClientEvents(): void {
+    this.client.on("connected", (welcome: WelcomePayload) => {
+      this.onConnected(welcome);
+    });
+
+    this.client.on("disconnected", () => {
+      this.onDisconnected();
+    });
+
+    this.client.on("reconnecting", (attempt: number) => {
+      this.statusBar.setReconnecting(attempt);
+    });
+
+    this.client.on("message", (msg: Message) => {
+      this.onMessage(msg);
+    });
+
+    this.client.on("error", (err: Error) => {
+      console.error("[Collab Client] Error:", err.message);
+      vscode.window.showErrorMessage(`Collaboration error: ${err.message}`);
+    });
+  }
+
+  // Connected
+
+  private onConnected(welcome: WelcomePayload): void {
+    this.hostUsername = welcome.hostUsername;
+    this.statusBar.setConnected(this.address, this.hostUsername);
+
+    vscode.window.showInformationMessage(
+      `Connected to ${this.hostUsername}'s session.`
+    );
+
+    // Setup sync components
+    this.setupSync();
+
+    // Send initial cursor position
+    this.cursorSync!.sendCurrentCursor();
+  }
+
+  // Disconnected
+
+  private onDisconnected(): void {
+    this.teardownSync();
+    this.statusBar.setDisconnected();
+    vscode.window.showWarningMessage(
+      "Disconnected from collaboration session."
+    );
+  }
+
+  // Message Router
+
+  private async onMessage(msg: Message): Promise<void> {
+    switch (msg.type) {
+      case MessageType.Edit:
+        if (this.documentSync) {
+          await this.documentSync.handleRemoteEdit(msg.payload as EditPayload);
+        }
+        break;
+
+      case MessageType.FullSync:
+        if (this.documentSync) {
+          await this.documentSync.handleFullSync(
+            msg.payload as FullSyncPayload
+          );
+        }
+        break;
+
+      case MessageType.CursorUpdate:
+        if (this.cursorSync) {
+          this.cursorSync.handleRemoteCursorUpdate(
+            msg.payload as CursorUpdatePayload
+          );
+        }
+        break;
+
+      case MessageType.FileCreated:
+        if (this.fileOpsSync) {
+          await this.fileOpsSync.handleFileCreated(
+            msg.payload as FileCreatedPayload
+          );
+        }
+        break;
+
+      case MessageType.FileDeleted:
+        if (this.fileOpsSync) {
+          await this.fileOpsSync.handleFileDeleted(
+            msg.payload as FileDeletedPayload
+          );
+        }
+        break;
+
+      case MessageType.FileRenamed:
+        if (this.fileOpsSync) {
+          await this.fileOpsSync.handleFileRenamed(
+            msg.payload as FileRenamedPayload
+          );
+        }
+        break;
+
+      default:
+        break;
+    }
+  }
+
+  // Sync Setup / Teardown
+
+  private setupSync(): void {
+    const wsFolder = vscode.workspace.workspaceFolders![0];
+    const config = vscode.workspace.getConfiguration("collab");
+    const color = config.get<string>("highlightColor") || "#00BFFF";
+    const ignored = config.get<string[]>("ignoredPatterns") || [];
+
+    const sendFn = (msg: Message) => this.client.send(msg);
+
+    this.documentSync = new DocumentSync(sendFn, false, wsFolder.uri.fsPath);
+    this.documentSync.activate();
+
+    this.cursorSync = new CursorSync(sendFn, this.username, color);
+    this.cursorSync.activate();
+
+    this.fileOpsSync = new FileOpsSync(
+      sendFn,
+      false,
+      wsFolder.uri.fsPath,
+      ignored
+    );
+    this.fileOpsSync.activate();
+  }
+
+  private teardownSync(): void {
+    this.documentSync?.dispose();
+    this.documentSync = null;
+
+    this.cursorSync?.dispose();
+    this.cursorSync = null;
+
+    this.fileOpsSync?.dispose();
+    this.fileOpsSync = null;
+  }
+
+  // Utilities
+
+  private getDefaultUsername(): string {
+    return require("os").userInfo().username || "Client";
+  }
+
+  get isActive(): boolean {
+    return this.client.isConnected;
+  }
+
+  // Dispose
+
+  dispose(): void {
+    this.disconnect();
+    this.disposables.forEach((d) => d.dispose());
+  }
+}
