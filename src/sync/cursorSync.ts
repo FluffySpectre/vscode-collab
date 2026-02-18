@@ -91,13 +91,17 @@ export class CursorSync implements vscode.Disposable, vscode.FileDecorationProvi
   activate(): void {
     this.disposables.push(
       vscode.window.onDidChangeTextEditorSelection((e) => {
-        this.onLocalSelectionChange(e);
+        if (e.textEditor === vscode.window.activeTextEditor) {
+          this.onLocalSelectionChange(e);
+        }
       })
     );
 
     // Re-apply decorations when the active editor changes
     this.disposables.push(
       vscode.window.onDidChangeActiveTextEditor(() => {
+        this.followActionGuard = true;
+        setTimeout(() => { this.followActionGuard = false; }, 100);
         this.applyRemoteDecorations();
       })
     );
