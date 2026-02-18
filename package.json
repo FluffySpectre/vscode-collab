@@ -3,10 +3,10 @@
   "displayName": "VSCode Collab",
   "description": "Real-time collaboration on a shared workspace over LAN. One host, one client",
   "icon": "icon.png",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "bjoernbosse",
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.109.0"
   },
   "categories": [
     "Other"
@@ -70,12 +70,12 @@
     "lint": "eslint src --ext ts"
   },
   "dependencies": {
-    "ws": "^8.16.0"
+    "ws": "^8.19.0"
   },
   "devDependencies": {
-    "@types/node": "^20.11.0",
-    "@types/vscode": "^1.85.0",
-    "@types/ws": "^8.5.10",
-    "typescript": "^5.3.3"
+    "@types/node": "^24.1.0",
+    "@types/vscode": "^1.109.0",
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.9.3"
   }
 }
