@@ -10,7 +10,7 @@ import {
  * CursorSync broadcasts local cursor/selection changes and renders
  * remote collaborator cursors as decorations in the editor.
  */
-export class CursorSync implements vscode.Disposable {
+export class CursorSync implements vscode.Disposable, vscode.FileDecorationProvider {
   private disposables: vscode.Disposable[] = [];
   private sendFn: (msg: Message) => void;
   private username: string;
@@ -21,11 +21,16 @@ export class CursorSync implements vscode.Disposable {
   private usernameLabelDecorationType: vscode.TextEditorDecorationType;
 
   private remoteCursors: CursorUpdatePayload | null = null;
+  private remoteFileUri: vscode.Uri | null = null;
+  private previousRemoteFileUri: vscode.Uri | null = null;
 
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly DEBOUNCE_MS = 50;
 
   private highlightColor: string;
+
+  private readonly _onDidChangeFileDecorations = new vscode.EventEmitter<vscode.Uri | vscode.Uri[]>();
+  readonly onDidChangeFileDecorations = this._onDidChangeFileDecorations.event;
 
   constructor(
     sendFn: (msg: Message) => void,
@@ -86,6 +91,30 @@ export class CursorSync implements vscode.Disposable {
         this.applyRemoteDecorations();
       })
     );
+
+    // Register file decoration provider for tab badges
+    this.disposables.push(
+      vscode.window.registerFileDecorationProvider(this)
+    );
+  }
+
+  // FileDecorationProvider
+
+  provideFileDecoration(uri: vscode.Uri): vscode.FileDecoration | undefined {
+    if (!this.remoteFileUri || !this.remoteCursors) {
+      return undefined;
+    }
+
+    if (uri.toString() !== this.remoteFileUri.toString()) {
+      return undefined;
+    }
+
+    const name = this.remoteCursors.username;
+
+    return {
+      badge: "👤",
+      tooltip: `${name} is editing this file`,
+    };
   }
 
   // Local Selection Changes
@@ -157,6 +186,26 @@ export class CursorSync implements vscode.Disposable {
   handleRemoteCursorUpdate(payload: CursorUpdatePayload): void {
     this.remoteCursors = payload;
     this.applyRemoteDecorations();
+    this.updateFileTabDecoration(payload.filePath);
+  }
+
+  private updateFileTabDecoration(relativePath: string): void {
+    const wsFolder = vscode.workspace.workspaceFolders?.[0];
+    if (!wsFolder) { return; }
+
+    const newUri = vscode.Uri.joinPath(wsFolder.uri, relativePath);
+    const urisToRefresh: vscode.Uri[] = [];
+
+    // Clear decoration from previous file if the remote user moved to a different file
+    if (this.previousRemoteFileUri && this.previousRemoteFileUri.toString() !== newUri.toString()) {
+      urisToRefresh.push(this.previousRemoteFileUri);
+    }
+
+    this.previousRemoteFileUri = this.remoteFileUri;
+    this.remoteFileUri = newUri;
+    urisToRefresh.push(newUri);
+
+    this._onDidChangeFileDecorations.fire(urisToRefresh);
   }
 
   // Render Decorations
@@ -241,7 +290,19 @@ export class CursorSync implements vscode.Disposable {
   // Clear
 
   clearDecorations(): void {
+    // Clear tab decoration for the remote file
+    const urisToRefresh: vscode.Uri[] = [];
+    if (this.remoteFileUri) { urisToRefresh.push(this.remoteFileUri); }
+    if (this.previousRemoteFileUri) { urisToRefresh.push(this.previousRemoteFileUri); }
+
     this.remoteCursors = null;
+    this.remoteFileUri = null;
+    this.previousRemoteFileUri = null;
+
+    if (urisToRefresh.length > 0) {
+      this._onDidChangeFileDecorations.fire(urisToRefresh);
+    }
+
     const editor = vscode.window.activeTextEditor;
     if (editor) {
       editor.setDecorations(this.cursorDecorationType, []);
@@ -262,6 +323,7 @@ export class CursorSync implements vscode.Disposable {
     this.lineHighlightDecorationType.dispose();
     this.selectionDecorationType.dispose();
     this.usernameLabelDecorationType.dispose();
+    this._onDidChangeFileDecorations.dispose();
     this.disposables.forEach((d) => d.dispose());
     this.disposables = [];
   }
