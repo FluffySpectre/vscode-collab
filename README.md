@@ -16,7 +16,7 @@ Real-time peer-to-peer pair programming on a shared workspace.
 1. Open the **same workspace** (same repo, same branch)
 2. Run command: **PairProg: Join Session**
 3. Enter the host's address
-4. You're connected — edits sync in real-time. Wohooo!
+4. You're connected - edits sync in real-time. Wohooo!
 
 ## How It Works
 
@@ -58,6 +58,9 @@ Default ignored patterns:
 | `PairProg: Stop Hosting Session`   | Stop hosting and disconnect    |
 | `PairProg: Join Session`           | Connect to a host              |
 | `PairProg: Leave Session`          | Disconnect from host           |
+| `PairProg: Toggle Follow Mode`     | Follow your partner around     |
+| `PairProg: Open Whiteboard`        | Open a whiteboard for sketches |
+| `PairProg: About`                  | Show the about panel |
 
 Click the status bar item for a quick-pick menu with these options.
 
@@ -74,7 +77,7 @@ npm run compile
 ### Debug / Run
 
 1. Open this folder in VS Code
-2. Press **F5** to launch the Extension Development Host
+2. Press **F5** to launch the Extension Dev Host
 3. In the new VS Code window, open a workspace folder
 
 
