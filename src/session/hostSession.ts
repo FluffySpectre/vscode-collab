@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { PairProgServer } from "../network/server";
+import { BeaconBroadcaster } from "../network/beacon";
 import {
   Message,
   MessageType,
@@ -37,6 +38,7 @@ export class HostSession implements vscode.Disposable {
   private username: string;
   private address: string = "";
   private clientUsername: string = "";
+  private broadcaster: BeaconBroadcaster | null = null;
   private isStopping = false;
   private _sendFn?: (msg: Message) => void;
   private _context: vscode.ExtensionContext;
@@ -59,6 +61,17 @@ export class HostSession implements vscode.Disposable {
     // Start the server
     this.address = await this.server.start(port);
     this.statusBar.setHosting(this.address);
+
+    const wsFolder = vscode.workspace.workspaceFolders?.[0];
+    this.broadcaster = new BeaconBroadcaster({
+      name: this.username,
+      address: this.address,
+      workspaceFolder: wsFolder?.name ?? "workspace",
+    });
+    this.broadcaster.on("error", (err: Error) => {
+      console.warn("[PairProg Host] Beacon error:", err.message);
+    });
+    this.broadcaster.start();
 
     vscode.window.showInformationMessage(
       `Pair Programming session started on ${this.address}`,
@@ -92,6 +105,8 @@ export class HostSession implements vscode.Disposable {
   stop(): void {
     this.isStopping = true;
     this.teardownSync();
+    this.broadcaster?.stop();
+    this.broadcaster = null;
     this.server.stop();
     this.statusBar.setDisconnected();
     vscode.window.showInformationMessage("Pair Programming session stopped.");

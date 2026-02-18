@@ -123,6 +123,18 @@ export interface ErrorPayload {
   code?: string;
 }
 
+// Beacon (UDP discovery - not a WebSocket message)
+
+export const BEACON_PORT = 9877;
+export const BEACON_MAGIC = "pairprog-beacon-v1";
+
+export interface BeaconPayload {
+  magic: string;
+  name: string;
+  address: string;
+  workspaceFolder: string;
+}
+
 // Serialization
 
 let _seqCounter = 0;

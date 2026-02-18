@@ -3,6 +3,7 @@ import { HostSession } from "./session/hostSession";
 import { ClientSession } from "./session/clientSession";
 import { StatusBar } from "./ui/statusBar";
 import { AboutPanel } from "./ui/aboutPanel";
+import { BeaconListener, DiscoveredSession } from "./network/beacon";
 
 let hostSession: HostSession | null = null;
 let clientSession: ClientSession | null = null;
@@ -93,23 +94,81 @@ export function activate(context: vscode.ExtensionContext) {
         return;
       }
 
-      // Prompt for host address
-      const address = await vscode.window.showInputBox({
-        prompt: "Enter the host's address (e.g., 192.168.1.5:9876)",
-        placeHolder: "192.168.1.5:9876",
-        validateInput: (value) => {
-          if (!value) { return "Address is required."; }
-          const parts = value.split(":");
-          if (parts.length !== 2 || isNaN(Number(parts[1]))) {
-            return "Format: IP:PORT (e.g., 192.168.1.5:9876)";
-          }
-          return null;
-        },
-      });
+      let address: string | undefined;
 
-      if (!address) {
-        return; // User cancelled
-      }
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: "Searching for pair programming sessions on your local network...",
+          cancellable: true,
+        },
+        async (_, token) => {
+          const listener = new BeaconListener();
+
+          const found: DiscoveredSession[] = await Promise.race([
+            new Promise<DiscoveredSession[]>((resolve) => {
+              listener.on("done", resolve);
+              listener.on("error", () => resolve([]));
+              try {
+                listener.listen();
+              } catch {
+                resolve([]);
+              }
+            }),
+            new Promise<DiscoveredSession[]>((resolve) => {
+              token.onCancellationRequested(() => {
+                listener.stop();
+                resolve([]);
+              });
+            }),
+          ]);
+
+          if (token.isCancellationRequested) { return; }
+
+          type SessionItem = vscode.QuickPickItem & { sessionAddress?: string };
+
+          const items: SessionItem[] = found.map((s) => ({
+            label: `$(broadcast) ${s.name}`,
+            description: s.workspaceFolder,
+            detail: s.address,
+            sessionAddress: s.address,
+          }));
+
+          items.push({
+            label: "$(edit) Enter address manually",
+            description: "Type the host's IP:PORT",
+            sessionAddress: undefined,
+          });
+
+          const picked = await vscode.window.showQuickPick(items, {
+            placeHolder: found.length > 0
+              ? `Found ${found.length} session(s) - select one or enter manually`
+              : "No sessions found - enter address manually",
+            title: "Join Pair Programming Session",
+          });
+
+          if (!picked) { return; }
+
+          if (picked.sessionAddress) {
+            address = picked.sessionAddress;
+          } else {
+            address = await vscode.window.showInputBox({
+              prompt: "Enter the host's address",
+              placeHolder: "192.168.1.5:9876",
+              validateInput: (value) => {
+                if (!value) { return "Address is required."; }
+                const parts = value.split(":");
+                if (parts.length !== 2 || isNaN(Number(parts[1]))) {
+                  return "Format: IP:PORT (e.g., 192.168.1.5:9876)";
+                }
+                return null;
+              },
+            });
+          }
+        }
+      );
+
+      if (!address) { return; }
 
       try {
         clientSession = new ClientSession(statusBar, context);
