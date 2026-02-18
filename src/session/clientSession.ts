@@ -95,6 +95,7 @@ export class ClientSession implements vscode.Disposable {
     });
 
     this.client.on("reconnecting", (attempt: number) => {
+      this.cursorSync?.clearDecorations();
       this.statusBar.setReconnecting(attempt);
     });
 

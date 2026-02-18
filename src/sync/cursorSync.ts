@@ -437,12 +437,11 @@ export class CursorSync implements vscode.Disposable, vscode.FileDecorationProvi
       this._onDidChangeFileDecorations.fire(urisToRefresh);
     }
 
-    const editor = vscode.window.activeTextEditor;
-    if (editor) {
-      editor.setDecorations(this.cursorDecorationType, []);
-      editor.setDecorations(this.lineHighlightDecorationType, []);
-      editor.setDecorations(this.selectionDecorationType, []);
-      editor.setDecorations(this.usernameLabelDecorationType, []);
+    for (const ed of vscode.window.visibleTextEditors) {
+      ed.setDecorations(this.cursorDecorationType, []);
+      ed.setDecorations(this.lineHighlightDecorationType, []);
+      ed.setDecorations(this.selectionDecorationType, []);
+      ed.setDecorations(this.usernameLabelDecorationType, []);
     }
   }
 
