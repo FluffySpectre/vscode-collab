@@ -41,7 +41,7 @@ export function activate(context: vscode.ExtensionContext) {
       }
 
       try {
-        hostSession = new HostSession(statusBar);
+        hostSession = new HostSession(statusBar, context);
         await hostSession.start();
       } catch (err: any) {
         vscode.window.showErrorMessage(
@@ -111,7 +111,7 @@ export function activate(context: vscode.ExtensionContext) {
       }
 
       try {
-        clientSession = new ClientSession(statusBar);
+        clientSession = new ClientSession(statusBar, context);
         await clientSession.connect(address);
       } catch (err: any) {
         vscode.window.showErrorMessage(
@@ -151,6 +151,18 @@ export function activate(context: vscode.ExtensionContext) {
     })
   );
 
+  // Open Whiteboard
+  
+  context.subscriptions.push(
+    vscode.commands.registerCommand("pairprog.openWhiteboard", () => {
+      if (hostSession?.isActive) {
+        hostSession.openWhiteboard();
+      } else if (clientSession?.isActive) {
+        clientSession.openWhiteboard();
+      }
+    })
+  );
+
   // Status Bar Click
 
   context.subscriptions.push(
@@ -160,12 +172,14 @@ export function activate(context: vscode.ExtensionContext) {
       if (hostSession?.isActive) {
         items.push(
           { label: "$(eye) Toggle Follow Mode", description: "" },
+          { label: "$(edit) Open Whiteboard", description: "" },
           { label: "$(copy) Copy Session Address", description: statusBar.getAddress() },
           { label: "$(debug-stop) Stop Hosting", description: "" }
         );
       } else if (clientSession?.isActive) {
         items.push(
           { label: "$(eye) Toggle Follow Mode", description: "" },
+          { label: "$(edit) Open Whiteboard", description: "" },
           { label: "$(debug-disconnect) Disconnect", description: "" }
         );
       } else {
@@ -183,6 +197,8 @@ export function activate(context: vscode.ExtensionContext) {
 
       if (picked.label.includes("Toggle Follow Mode")) {
         vscode.commands.executeCommand("pairprog.toggleFollowMode");
+      } else if (picked.label.includes("Open Whiteboard")) {
+        vscode.commands.executeCommand("pairprog.openWhiteboard");
       } else if (picked.label.includes("Copy Session Address")) {
         await vscode.env.clipboard.writeText(statusBar.getAddress());
         vscode.window.showInformationMessage("Session address copied!");

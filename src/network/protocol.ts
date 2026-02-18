@@ -19,6 +19,10 @@ export enum MessageType {
   FileDeleted = "fileDeleted",
   FileRenamed = "fileRenamed",
 
+  // Whiteboard
+  WhiteboardStroke = "whiteboardStroke",
+  WhiteboardClear = "whiteboardClear",
+
   // Lifecycle
   Ping = "ping",
   Pong = "pong",
@@ -105,6 +109,14 @@ export interface FileRenamedPayload {
   oldPath: string;
   newPath: string;
 }
+
+export interface WhiteboardStrokePayload {
+  points: { x: number; y: number }[];
+  color: string;
+  width: number;
+}
+
+export interface WhiteboardClearPayload {}
 
 export interface ErrorPayload {
   message: string;

@@ -10,11 +10,13 @@ import {
   FollowUpdatePayload,
   OpenFilePayload,
   createMessage,
+  WhiteboardStrokePayload,
 } from "../network/protocol";
 import { DocumentSync } from "../sync/documentSync";
 import { CursorSync } from "../sync/cursorSync";
 import { FileOpsSync } from "../sync/fileOpsSync";
 import { StatusBar } from "../ui/statusBar";
+import { WhiteboardPanel } from "../ui/whiteboardPanel";
 
 /**
  * HostSession manages the entire host-side lifecycle:
@@ -29,15 +31,19 @@ export class HostSession implements vscode.Disposable {
   private cursorSync: CursorSync | null = null;
   private fileOpsSync: FileOpsSync | null = null;
   private statusBar: StatusBar;
+  private whiteboard?: WhiteboardPanel;
   private disposables: vscode.Disposable[] = [];
 
   private username: string;
   private address: string = "";
   private clientUsername: string = "";
   private isStopping = false;
+  private _sendFn?: (msg: Message) => void;
+  private _context: vscode.ExtensionContext;
 
-  constructor(statusBar: StatusBar) {
+  constructor(statusBar: StatusBar, context: vscode.ExtensionContext) {
     this.statusBar = statusBar;
+    this._context = context;
     this.server = new PairProgServer();
 
     const config = vscode.workspace.getConfiguration("pairprog");
@@ -195,6 +201,21 @@ export class HostSession implements vscode.Disposable {
           );
         }
         break;
+      
+      case MessageType.WhiteboardStroke:
+        this.ensureWhiteboard(this._context);
+        if (this.whiteboard && !this.whiteboard.disposed) {
+          this.whiteboard.handleRemoteStroke(
+            msg.payload as WhiteboardStrokePayload
+          );
+        }
+        break;
+
+      case MessageType.WhiteboardClear:
+        if (this.whiteboard && !this.whiteboard.disposed) {
+          this.whiteboard.handleRemoteClear();
+        }
+        break;
 
       default:
         break;
@@ -228,6 +249,8 @@ export class HostSession implements vscode.Disposable {
       ignored
     );
     this.fileOpsSync.activate();
+
+    this._sendFn = sendFn;
   }
 
   private teardownSync(): void {
@@ -271,6 +294,20 @@ export class HostSession implements vscode.Disposable {
   toggleFollowMode(): void {
     if (!this.cursorSync) { return; }
     this.cursorSync.toggleFollow();
+  }
+
+  private ensureWhiteboard(context: vscode.ExtensionContext) {
+    if (!this._sendFn) { return; }
+    if (!this.whiteboard || this.whiteboard.disposed) {
+      this.whiteboard = new WhiteboardPanel(context, this._sendFn);
+    }
+  }
+
+  openWhiteboard() {
+    this.ensureWhiteboard(this._context);
+    if (this.whiteboard && !this.whiteboard.disposed) {
+      this.whiteboard.reveal();
+    }
   }
 
   get isActive(): boolean {

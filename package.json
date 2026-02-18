@@ -33,6 +33,10 @@
       {
         "command": "pairprog.toggleFollowMode",
         "title": "PairProg: Toggle Follow Mode"
+      },
+      {
+        "command": "pairprog.openWhiteboard",
+        "title": "PairProg: Open Whiteboard"
       }
     ],
     "configuration": {
