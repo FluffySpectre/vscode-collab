@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { HostSession } from "./session/hostSession";
 import { ClientSession } from "./session/clientSession";
 import { StatusBar } from "./ui/statusBar";
+import { AboutPanel } from "./ui/aboutPanel";
 
 let hostSession: HostSession | null = null;
 let clientSession: ClientSession | null = null;
@@ -163,6 +164,14 @@ export function activate(context: vscode.ExtensionContext) {
     })
   );
 
+  // About
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("pairprog.openAbout", () => {
+      AboutPanel.show(context);
+    })
+  );
+
   // Status Bar Click
 
   context.subscriptions.push(
@@ -174,18 +183,21 @@ export function activate(context: vscode.ExtensionContext) {
           { label: "$(eye) Toggle Follow Mode", description: "" },
           { label: "$(edit) Open Whiteboard", description: "" },
           { label: "$(copy) Copy Session Address", description: statusBar.getAddress() },
-          { label: "$(debug-stop) Stop Hosting", description: "" }
+          { label: "$(info) About", description: "" },
+          { label: "$(debug-stop) Stop Hosting", description: "" },
         );
       } else if (clientSession?.isActive) {
         items.push(
           { label: "$(eye) Toggle Follow Mode", description: "" },
           { label: "$(edit) Open Whiteboard", description: "" },
-          { label: "$(debug-disconnect) Disconnect", description: "" }
+          { label: "$(info) About", description: "" },
+          { label: "$(debug-disconnect) Disconnect", description: "" },
         );
       } else {
         items.push(
           { label: "$(broadcast) Start Hosting", description: "" },
-          { label: "$(plug) Join Session", description: "" }
+          { label: "$(plug) Join Session", description: "" },
+          { label: "$(info) About", description: "" }
         );
       }
 
@@ -210,6 +222,8 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.executeCommand("pairprog.startSession");
       } else if (picked.label.includes("Join Session")) {
         vscode.commands.executeCommand("pairprog.joinSession");
+      } else if (picked.label.includes("About")) {
+        vscode.commands.executeCommand("pairprog.openAbout");
       }
     })
   );

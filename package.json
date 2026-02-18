@@ -37,6 +37,10 @@
       {
         "command": "pairprog.openWhiteboard",
         "title": "PairProg: Open Whiteboard"
+      },
+      {
+        "command": "pairprog.openAbout",
+        "title": "PairProg: About"
       }
     ],
     "configuration": {
