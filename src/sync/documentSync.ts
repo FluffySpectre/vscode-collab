@@ -120,14 +120,14 @@ export class DocumentSync implements vscode.Disposable {
       text: change.text,
     }));
 
-    // Record in history (host only)
-    if (this.isHost) {
-      this.recordEdit(filePath, version, changes);
-    }
-
     this.incrementVersion(filePath);
 
-    // Send edit to remote
+    // Record in history (host only) - use new version so OT filter works correctly
+    if (this.isHost) {
+      this.recordEdit(filePath, this.getVersion(filePath), changes);
+    }
+
+    // Send edit to remote with the version this edit was based on
     const payload: EditPayload = { filePath, version, changes };
     this.sendFn(createMessage(MessageType.Edit, payload));
   }
@@ -142,7 +142,19 @@ export class DocumentSync implements vscode.Disposable {
 
     // If the host receives an edit based on an old version, transform it!
     if (this.isHost && version < currentVersion) {
-      transformedChanges = this.transformChanges(filePath, version, changes);
+      const result = this.transformChanges(filePath, version, changes);
+      if (result === null) {
+        // History is insufficient - send a full sync instead
+        const uri = this.toAbsoluteUri(filePath);
+        try {
+          const doc = await vscode.workspace.openTextDocument(uri);
+          this.sendFullSync(filePath, doc.getText());
+        } catch {
+          // File doesn't exist - nothing to sync
+        }
+        return;
+      }
+      transformedChanges = result;
     }
 
     // Find the document
@@ -167,22 +179,21 @@ export class DocumentSync implements vscode.Disposable {
       workspaceEdit.replace(uri, range, change.text);
     }
 
-    // Apply with guard to prevent echo - increment before, decrement on next tick
+    // Apply with guard to prevent echo
     this.remoteEditGuard++;
     try {
       await vscode.workspace.applyEdit(workspaceEdit);
-
-      // If host: record this edit in history for OT
-      if (this.isHost) {
-        this.recordEdit(filePath, currentVersion, transformedChanges);
-      }
-
-      // Both sides increment version to stay in sync
-      this.incrementVersion(filePath);
     } finally {
-      setTimeout(() => {
-        this.remoteEditGuard--;
-      }, 0);
+      this.remoteEditGuard--;
+    }
+
+    // Both sides increment version to stay in sync
+    this.incrementVersion(filePath);
+
+    // If host: record this edit in history for OT
+    // Record at the new version so transformChanges filter works correctly
+    if (this.isHost) {
+      this.recordEdit(filePath, this.getVersion(filePath), transformedChanges);
     }
   }
 
@@ -222,9 +233,7 @@ export class DocumentSync implements vscode.Disposable {
     try {
       await vscode.workspace.applyEdit(edit);
     } finally {
-      setTimeout(() => {
-        this.remoteEditGuard--;
-      }, 0);
+      this.remoteEditGuard--;
     }
   }
 
@@ -275,11 +284,16 @@ export class DocumentSync implements vscode.Disposable {
     filePath: string,
     baseVersion: number,
     changes: TextChange[]
-  ): TextChange[] {
+  ): TextChange[] | null {
     const history = this.editHistory.get(filePath) || [];
 
-    // Get all edits that happened between baseVersion and now
-    const intervening = history.filter((h) => h.version >= baseVersion);
+    // Check if there is enough history to transform properly
+    if (history.length > 0 && history[0].version > baseVersion + 1) {
+      return null; // Fallback to full sync
+    }
+
+    // Get all edits that happened after baseVersion
+    const intervening = history.filter((h) => h.version > baseVersion);
 
     let transformed = [...changes];
 

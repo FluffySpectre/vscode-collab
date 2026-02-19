@@ -19,7 +19,7 @@ export class FileOpsSync implements vscode.Disposable {
   private sendFn: (msg: Message) => void;
   private isHost: boolean;
   private workspaceRoot: string;
-  private isApplyingRemoteOp = false;
+  private remoteOpGuard = 0;
   private ignoredPatterns: string[]; // Glob patterns to ignore
 
   constructor(
@@ -45,7 +45,7 @@ export class FileOpsSync implements vscode.Disposable {
     // Watch for file creation
     this.disposables.push(
       vscode.workspace.onDidCreateFiles((e) => {
-        if (this.isApplyingRemoteOp) { return; }
+        if (this.remoteOpGuard > 0) { return; }
         for (const file of e.files) {
           this.onFileCreated(file);
         }
@@ -55,7 +55,7 @@ export class FileOpsSync implements vscode.Disposable {
     // Watch for file deletion
     this.disposables.push(
       vscode.workspace.onDidDeleteFiles((e) => {
-        if (this.isApplyingRemoteOp) { return; }
+        if (this.remoteOpGuard > 0) { return; }
         for (const file of e.files) {
           this.onFileDeleted(file);
         }
@@ -65,7 +65,7 @@ export class FileOpsSync implements vscode.Disposable {
     // Watch for file rename
     this.disposables.push(
       vscode.workspace.onDidRenameFiles((e) => {
-        if (this.isApplyingRemoteOp) { return; }
+        if (this.remoteOpGuard > 0) { return; }
         for (const { oldUri, newUri } of e.files) {
           this.onFileRenamed(oldUri, newUri);
         }
@@ -120,7 +120,7 @@ export class FileOpsSync implements vscode.Disposable {
   async handleFileCreated(payload: FileCreatedPayload): Promise<void> {
     const uri = this.toAbsoluteUri(payload.filePath);
 
-    this.isApplyingRemoteOp = true;
+    this.remoteOpGuard++;
     try {
       // Ensure parent directory exists
       const dir = vscode.Uri.joinPath(uri, "..");
@@ -133,20 +133,20 @@ export class FileOpsSync implements vscode.Disposable {
       const content = Buffer.from(payload.content, "utf-8");
       await vscode.workspace.fs.writeFile(uri, content);
     } finally {
-      this.isApplyingRemoteOp = false;
+      this.remoteOpGuard--;
     }
   }
 
   async handleFileDeleted(payload: FileDeletedPayload): Promise<void> {
     const uri = this.toAbsoluteUri(payload.filePath);
 
-    this.isApplyingRemoteOp = true;
+    this.remoteOpGuard++;
     try {
       await vscode.workspace.fs.delete(uri, { recursive: false });
     } catch {
       // File might not exist locally - that's fine
     } finally {
-      this.isApplyingRemoteOp = false;
+      this.remoteOpGuard--;
     }
   }
 
@@ -154,13 +154,13 @@ export class FileOpsSync implements vscode.Disposable {
     const oldUri = this.toAbsoluteUri(payload.oldPath);
     const newUri = this.toAbsoluteUri(payload.newPath);
 
-    this.isApplyingRemoteOp = true;
+    this.remoteOpGuard++;
     try {
       await vscode.workspace.fs.rename(oldUri, newUri, { overwrite: false });
     } catch {
       // Source might not exist locally - skip
     } finally {
-      this.isApplyingRemoteOp = false;
+      this.remoteOpGuard--;
     }
   }
 
