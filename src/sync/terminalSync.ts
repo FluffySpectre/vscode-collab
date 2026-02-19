@@ -27,6 +27,7 @@ class HostPseudoterminal implements vscode.Pseudoterminal {
   private onOutputCallback: (data: string) => void;
   private onExitCallback: () => void;
   private exited = false;
+  private _lineBuffer = "";
 
   constructor(
     shell: string,
@@ -48,7 +49,12 @@ class HostPseudoterminal implements vscode.Pseudoterminal {
     const shellName = (shell.split("/").pop() || "").toLowerCase();
     let shellArgs: string[];
     if (process.platform === "win32") {
-      shellArgs = [];
+      const shellBaseName = shellName.replace(".exe", "");
+      if (shellBaseName === "powershell" || shellBaseName === "pwsh") {
+        shellArgs = ["-NoExit", "-NoLogo"];
+      } else {
+        shellArgs = ["/k"]; // cmd.exe: /k keeps the shell open after startup
+      }
     } else if (shellName === "bash") {
       shellArgs = ["-i"];
     } else {
@@ -60,10 +66,10 @@ class HostPseudoterminal implements vscode.Pseudoterminal {
       env,
       stdio: ["pipe", "pipe", "pipe"],
       shell: false,
+      detached: process.platform !== "win32", // create a new process group on Unix so we can kill the entire group on exit
     });
 
     this.childProcess.stdout?.on("data", (data: Buffer) => {
-      // Replace bare \n with \r\n — piped stdio doesn't add \r like a real TTY does
       const text = data.toString().replace(/\r?\n/g, "\r\n");
       this.writeEmitter.fire(text);
       this.onOutputCallback(text);
@@ -95,9 +101,25 @@ class HostPseudoterminal implements vscode.Pseudoterminal {
 
   open(): void {}
 
+  // Kill the child process and its entire process tree
+  private killProcessTree(signal: "SIGTERM" | "SIGINT" | "SIGTSTP"): void {
+    if (process.platform === "win32") {
+      try {
+        spawn("taskkill", ["/pid", String(this.childProcess.pid!), "/t", "/f"], {
+          stdio: "ignore",
+          detached: false,
+        });
+      } catch { /* ignore */ }
+      try { this.childProcess.kill(); } catch { /* ignore */ }
+    } else {
+      try { process.kill(-this.childProcess.pid!, signal); } catch { /* ignore */ }
+      try { this.childProcess.kill(signal); } catch { /* ignore */ }
+    }
+  }
+
   close(): void {
     if (!this.exited) {
-      this.childProcess.kill();
+      this.killProcessTree("SIGTERM");
     }
   }
 
@@ -115,11 +137,47 @@ class HostPseudoterminal implements vscode.Pseudoterminal {
     this.writeToStdin(data);
   }
 
-  // Write input to the shell's stdin. The shell in interactive mode (-i)
-  // handles echoing through stdout, which we already capture and broadcast.
   private writeToStdin(data: string): void {
-    const toWrite = data === "\r" ? "\n" : data;
-    this.childProcess.stdin?.write(toWrite);
+    // Escape sequences
+    if (data.startsWith("\x1b")) {
+      this.childProcess.stdin?.write(data);
+      return;
+    }
+
+    for (const char of data) {
+      switch (char) {
+        case "\x03": // Ctrl+C
+          this._lineBuffer = "";
+          this.killProcessTree("SIGINT");
+          break;
+        case "\x1a": // Ctrl+Z
+          this._lineBuffer = "";
+          if (process.platform !== "win32") {
+            try { process.kill(-this.childProcess.pid!, "SIGTSTP"); } catch { /* ignore */ }
+            try { this.childProcess.kill("SIGTSTP"); } catch { /* ignore */ }
+          }
+          break;
+        case "\x04": // Ctrl+D
+          this.childProcess.stdin?.write(this._lineBuffer + char);
+          this._lineBuffer = "";
+          break;
+        case "\x7f": // Backspace
+          if (this._lineBuffer.length > 0) {
+            this._lineBuffer = this._lineBuffer.slice(0, -1);
+            this.writeEmitter.fire("\b \b");
+          }
+          break;
+        case "\r": // Enter
+          this.childProcess.stdin?.write(this._lineBuffer + "\n");
+          this._lineBuffer = "";
+          this.writeEmitter.fire("\r\n");
+          break;
+        default: // printable character
+          this._lineBuffer += char;
+          this.writeEmitter.fire(char);
+          break;
+      }
+    }
   }
 
   resize(): void {
@@ -128,7 +186,7 @@ class HostPseudoterminal implements vscode.Pseudoterminal {
 
   dispose(): void {
     if (!this.exited) {
-      this.childProcess.kill();
+      this.killProcessTree("SIGTERM");
     }
     this.writeEmitter.dispose();
     this.closeEmitter.dispose();
@@ -147,6 +205,7 @@ class ClientPseudoterminal implements vscode.Pseudoterminal {
   private onResizeCallback: (cols: number, rows: number) => void;
   private _readonly = true; // readonly by default
   private _readonlyMessageShown = false;
+  private _lineBuffer = "";
 
   constructor(
     onInput: (data: string) => void,
@@ -172,7 +231,44 @@ class ClientPseudoterminal implements vscode.Pseudoterminal {
       }
       return;
     }
-    this.onInputCallback(data);
+
+    // Escape sequences
+    if (data.startsWith("\x1b")) {
+      this.onInputCallback(data);
+      return;
+    }
+
+    for (const char of data) {
+      switch (char) {
+        case "\x03": // Ctrl+C
+          this._lineBuffer = "";
+          this.onInputCallback(char);
+          break;
+        case "\x1a": // Ctrl+Z
+          this._lineBuffer = "";
+          this.onInputCallback(char);
+          break;
+        case "\x04": // Ctrl+D
+          this.onInputCallback(this._lineBuffer + char);
+          this._lineBuffer = "";
+          break;
+        case "\x7f": // Backspace
+          if (this._lineBuffer.length > 0) {
+            this._lineBuffer = this._lineBuffer.slice(0, -1);
+            this.writeEmitter.fire("\b \b");
+          }
+          break;
+        case "\r": // Enter — flush buffered line to host
+          this.onInputCallback(this._lineBuffer + "\r");
+          this._lineBuffer = "";
+          this.writeEmitter.fire("\r\n");
+          break;
+        default: // printable character — echo locally and buffer for Enter
+          this._lineBuffer += char;
+          this.writeEmitter.fire(char);
+          break;
+      }
+    }
   }
 
   setDimensions(dimensions: vscode.TerminalDimensions): void {
@@ -182,6 +278,7 @@ class ClientPseudoterminal implements vscode.Pseudoterminal {
   setReadonly(value: boolean): void {
     this._readonly = value;
     this._readonlyMessageShown = false;
+    this._lineBuffer = "";
     if (value) {
       this.writeEmitter.fire(
         "\r\n\x1b[33m[Write access revoked by host]\x1b[0m\r\n"
@@ -570,7 +667,7 @@ export class TerminalSync implements vscode.Disposable {
     if (process.platform === "win32") {
       return process.env.COMSPEC || "cmd.exe";
     }
-    return process.env.SHELL || "/bin/sh";
+    return vscode.env.shell || process.env.SHELL || "/bin/sh";
   }
 
   // Dispose
