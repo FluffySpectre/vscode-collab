@@ -1,12 +1,11 @@
 import * as vscode from "vscode";
+import * as ws from "ws";
 import { PairProgClient } from "../network/client";
 import {
   Message,
   MessageType,
   HelloPayload,
   WelcomePayload,
-  EditPayload,
-  FullSyncPayload,
   CursorUpdatePayload,
   FollowUpdatePayload,
   FileCreatedPayload,
@@ -18,20 +17,28 @@ import {
   ChatMessagePayload,
 } from "../network/protocol";
 import { DocumentSync } from "../sync/documentSync";
+import { ShareDBBridge } from "../sync/sharedbBridge";
 import { CursorSync } from "../sync/cursorSync";
 import { FileOpsSync } from "../sync/fileOpsSync";
 import { StatusBar } from "../ui/statusBar";
 import { WhiteboardPanel } from "../ui/whiteboardPanel";
+import { type as otText } from "ot-text";
+
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const ShareDBClient = require("sharedb/lib/client");
+ShareDBClient.types.register(otText);
 
 /**
  * ClientSession manages the client-side lifecycle:
  *  1. Connects to the host's WebSocket server
  *  2. Sends Hello, receives Welcome
- *  3. Receives initial FullSync for open files
- *  4. Relays local edits to host and applies confirmed edits from host
+ *  3. Subscribes to ShareDB documents for open files
+ *  4. Relays local edits via ShareDB and applies remote ops
  */
 export class ClientSession implements vscode.Disposable {
   private client: PairProgClient;
+  private sharedbBridge: ShareDBBridge | null = null;
+  private sharedbSocket: ws.WebSocket | null = null;
   private documentSync: DocumentSync | null = null;
   private cursorSync: CursorSync | null = null;
   private fileOpsSync: FileOpsSync | null = null;
@@ -44,6 +51,7 @@ export class ClientSession implements vscode.Disposable {
   private hostUsername: string = "";
   private _sendFn?: (msg: Message) => void;
   private _context: vscode.ExtensionContext;
+  private _openFiles: string[] = [];
 
   constructor(statusBar: StatusBar, context: vscode.ExtensionContext) {
     this.statusBar = statusBar;
@@ -115,14 +123,22 @@ export class ClientSession implements vscode.Disposable {
 
   private onConnected(welcome: WelcomePayload): void {
     this.hostUsername = welcome.hostUsername;
+    this._openFiles = welcome.openFiles || [];
     this.statusBar.setConnected(this.address, this.hostUsername);
 
     vscode.window.showInformationMessage(
       `Connected to ${this.hostUsername}'s session.`
     );
 
-    // Setup sync components
+    // Setup sync components (creates ShareDB connection + bridge)
     this.setupSync();
+
+    // Subscribe to ShareDB docs for all host's open files
+    for (const filePath of this._openFiles) {
+      this.sharedbBridge?.ensureDoc(filePath).catch((err) => {
+        console.warn(`[PairProg Client] Failed to subscribe to ${filePath}:`, err);
+      });
+    }
 
     // Send initial cursor position
     this.cursorSync!.sendCurrentCursor();
@@ -142,20 +158,6 @@ export class ClientSession implements vscode.Disposable {
 
   private async onMessage(msg: Message): Promise<void> {
     switch (msg.type) {
-      case MessageType.Edit:
-        if (this.documentSync) {
-          await this.documentSync.handleRemoteEdit(msg.payload as EditPayload);
-        }
-        break;
-
-      case MessageType.FullSync:
-        if (this.documentSync) {
-          await this.documentSync.handleFullSync(
-            msg.payload as FullSyncPayload
-          );
-        }
-        break;
-
       case MessageType.CursorUpdate:
         if (this.cursorSync) {
           this.cursorSync.handleRemoteCursorUpdate(
@@ -256,6 +258,12 @@ export class ClientSession implements vscode.Disposable {
     const sendFn = (msg: Message) => this.client.send(msg);
     this._sendFn = sendFn;
 
+    this.sharedbSocket = new ws.WebSocket(`ws://${this.address}/sharedb`);
+    const sharedbConnection = new ShareDBClient.Connection(this.sharedbSocket);
+
+    this.sharedbBridge = new ShareDBBridge(wsFolder.uri.fsPath, sharedbConnection);
+    this.sharedbBridge.activate();
+
     this.documentSync = new DocumentSync(sendFn, false, wsFolder.uri.fsPath);
     this.documentSync.activate();
 
@@ -278,6 +286,18 @@ export class ClientSession implements vscode.Disposable {
   private teardownSync(): void {
     this.documentSync?.dispose();
     this.documentSync = null;
+
+    this.sharedbBridge?.dispose();
+    this.sharedbBridge = null;
+
+    if (this.sharedbSocket) {
+      try {
+        this.sharedbSocket.close();
+      } catch {
+        // ignore
+      }
+      this.sharedbSocket = null;
+    }
 
     this.cursorSync?.dispose();
     this.cursorSync = null;

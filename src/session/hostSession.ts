@@ -1,21 +1,21 @@
 import * as vscode from "vscode";
 import { PairProgServer } from "../network/server";
+import { ShareDBServer } from "../network/sharedbServer";
 import { BeaconBroadcaster } from "../network/beacon";
 import {
   Message,
   MessageType,
   HelloPayload,
   WelcomePayload,
-  EditPayload,
   CursorUpdatePayload,
   FollowUpdatePayload,
-  OpenFilePayload,
   FileSaveRequestPayload,
   createMessage,
   WhiteboardStrokePayload,
   ChatMessagePayload,
 } from "../network/protocol";
 import { DocumentSync } from "../sync/documentSync";
+import { ShareDBBridge } from "../sync/sharedbBridge";
 import { CursorSync } from "../sync/cursorSync";
 import { FileOpsSync } from "../sync/fileOpsSync";
 import { StatusBar } from "../ui/statusBar";
@@ -30,6 +30,8 @@ import { WhiteboardPanel } from "../ui/whiteboardPanel";
  */
 export class HostSession implements vscode.Disposable {
   private server: PairProgServer;
+  private sharedbServer: ShareDBServer | null = null;
+  private sharedbBridge: ShareDBBridge | null = null;
   private documentSync: DocumentSync | null = null;
   private cursorSync: CursorSync | null = null;
   private fileOpsSync: FileOpsSync | null = null;
@@ -62,6 +64,7 @@ export class HostSession implements vscode.Disposable {
 
     // Start the server
     this.address = await this.server.start(port);
+    this.sharedbServer = new ShareDBServer(this.server);
     this.statusBar.setHosting(this.address);
 
     const wsFolder = vscode.workspace.workspaceFolders?.[0];
@@ -107,6 +110,8 @@ export class HostSession implements vscode.Disposable {
   stop(): void {
     this.isStopping = true;
     this.teardownSync();
+    this.sharedbServer?.stop();
+    this.sharedbServer = null;
     this.broadcaster?.stop();
     this.broadcaster = null;
     this.server.stop();
@@ -154,12 +159,12 @@ export class HostSession implements vscode.Disposable {
     };
     this.server.send(createMessage(MessageType.Welcome, welcome));
 
-    // Send full sync for all open files
+    // Ensure ShareDB docs exist for all open files
     for (const filePath of openFiles) {
       try {
-        const uri = this.documentSync!.toAbsoluteUri(filePath);
+        const uri = this.sharedbBridge!.toAbsoluteUri(filePath);
         const doc = await vscode.workspace.openTextDocument(uri);
-        this.documentSync!.sendFullSync(filePath, doc.getText());
+        await this.sharedbBridge!.ensureDoc(filePath, doc.getText());
       } catch {
         // Skip files that can't be read
       }
@@ -187,14 +192,6 @@ export class HostSession implements vscode.Disposable {
 
   private async onMessage(msg: Message): Promise<void> {
     switch (msg.type) {
-      case MessageType.Edit:
-        if (this.documentSync) {
-          // Apply the client's edit on host's file - don't send it back,
-          // the client already applied it locally when the user typed it.
-          await this.documentSync.handleRemoteEdit(msg.payload as EditPayload);
-        }
-        break;
-
       case MessageType.CursorUpdate:
         if (this.cursorSync) {
           this.cursorSync.handleRemoteCursorUpdate(
@@ -207,14 +204,6 @@ export class HostSession implements vscode.Disposable {
         if (this.cursorSync) {
           this.cursorSync.handleRemoteFollowUpdate(
             msg.payload as FollowUpdatePayload
-          );
-        }
-        break;
-
-      case MessageType.OpenFile:
-        if (this.documentSync) {
-          await this.documentSync.handleOpenFileRequest(
-            msg.payload as OpenFilePayload
           );
         }
         break;
@@ -278,6 +267,10 @@ export class HostSession implements vscode.Disposable {
 
     const sendFn = (msg: Message) => this.server.send(msg);
 
+    const sharedbConnection = this.sharedbServer!.getHostConnection();
+    this.sharedbBridge = new ShareDBBridge(wsFolder.uri.fsPath, sharedbConnection);
+    this.sharedbBridge.activate();
+
     this.documentSync = new DocumentSync(sendFn, true, wsFolder.uri.fsPath);
     this.documentSync.activate();
 
@@ -302,6 +295,9 @@ export class HostSession implements vscode.Disposable {
   private teardownSync(): void {
     this.documentSync?.dispose();
     this.documentSync = null;
+
+    this.sharedbBridge?.dispose();
+    this.sharedbBridge = null;
 
     this.cursorSync?.dispose();
     this.cursorSync = null;

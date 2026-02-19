@@ -5,11 +5,6 @@ export enum MessageType {
   Hello = "hello",
   Welcome = "welcome",
 
-  // Document sync
-  Edit = "edit",
-  FullSync = "fullSync",
-  OpenFile = "openFile",
-
   // Cursor sync
   CursorUpdate = "cursorUpdate",
   FollowUpdate = "followUpdate",
@@ -55,28 +50,6 @@ export interface HelloPayload {
 export interface WelcomePayload {
   hostUsername: string;
   openFiles: string[]; // workspace-relative paths of open documents
-}
-
-export interface TextChange {
-  rangeOffset: number; // start offset in the document
-  rangeLength: number; // number of chars replaced (0 = pure insert)
-  text: string; // replacement / inserted text
-}
-
-export interface EditPayload {
-  filePath: string; // workspace-relative
-  version: number; // document version this edit is based on
-  changes: TextChange[];
-}
-
-export interface FullSyncPayload {
-  filePath: string;
-  content: string;
-  version: number;
-}
-
-export interface OpenFilePayload {
-  filePath: string;
 }
 
 export interface CursorPosition {
@@ -141,7 +114,7 @@ export interface ErrorPayload {
   code?: string;
 }
 
-// Beacon (UDP discovery - not a WebSocket message)
+// Beacon (UDP discovery)
 
 export const BEACON_PORT = 9877;
 export const BEACON_MAGIC = "pairprog-beacon-v1";

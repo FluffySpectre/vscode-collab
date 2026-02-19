@@ -1,4 +1,5 @@
 import * as ws from "ws";
+import * as http from "http";
 import * as os from "os";
 import { EventEmitter } from "events";
 import {
@@ -18,7 +19,8 @@ export interface ServerEvents {
 }
 
 export class PairProgServer extends EventEmitter {
-  private server: ws.Server | null = null;
+  private _httpServer: http.Server | null = null;
+  private wsServer: ws.Server | null = null;
   private client: ws.WebSocket | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private missedPings = 0;
@@ -26,30 +28,53 @@ export class PairProgServer extends EventEmitter {
   private readonly PING_INTERVAL_MS = 5000;
 
   get isRunning(): boolean {
-    return this.server !== null;
+    return this.wsServer !== null;
   }
 
   get hasClient(): boolean {
     return this.client !== null && this.client.readyState === ws.OPEN;
   }
 
+  get httpServer(): http.Server | null {
+    return this._httpServer;
+  }
+
   // Start
 
   async start(port: number): Promise<string> {
     return new Promise((resolve, reject) => {
-      this.server = new ws.Server({ port, host: "0.0.0.0" }, () => {
-        const lanIp = this.getLanIp();
-        this.setupHeartbeat();
-        resolve(`${lanIp}:${port}`);
-      });
+      this._httpServer = http.createServer();
+      this.wsServer = new ws.Server({ noServer: true });
 
-      this.server.on("error", (err) => {
+      this._httpServer.on("error", (err) => {
         this.emit("error", err);
         reject(err);
       });
 
-      this.server.on("connection", (socket) => {
+      // Route WebSocket upgrade requests by path
+      this._httpServer.on("upgrade", (request, socket, head) => {
+        const { pathname } = new URL(request.url || "/", "http://localhost");
+
+        if (pathname === "/sharedb") {
+          // Let the ShareDB ws.Server handle this - it registers its own
+          // upgrade handler via the 'sharedbUpgrade' event we emit.
+          this.emit("upgrade", request, socket, head);
+        } else {
+          // Default path: handle with the protocol ws.Server
+          this.wsServer!.handleUpgrade(request, socket, head, (client) => {
+            this.wsServer!.emit("connection", client, request);
+          });
+        }
+      });
+
+      this.wsServer.on("connection", (socket) => {
         this.handleNewConnection(socket);
+      });
+
+      this._httpServer.listen(port, "0.0.0.0", () => {
+        const lanIp = this.getLanIp();
+        this.setupHeartbeat();
+        resolve(`${lanIp}:${port}`);
       });
     });
   }
@@ -69,9 +94,14 @@ export class PairProgServer extends EventEmitter {
       this.client = null;
     }
 
-    if (this.server) {
-      this.server.close();
-      this.server = null;
+    if (this.wsServer) {
+      this.wsServer.close();
+      this.wsServer = null;
+    }
+
+    if (this._httpServer) {
+      this._httpServer.close();
+      this._httpServer = null;
     }
   }
 
