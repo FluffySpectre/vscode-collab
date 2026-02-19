@@ -212,13 +212,27 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   // Open Whiteboard
-  
+
   context.subscriptions.push(
     vscode.commands.registerCommand("pairprog.openWhiteboard", () => {
       if (hostSession?.isActive) {
         hostSession.openWhiteboard();
       } else if (clientSession?.isActive) {
         clientSession.openWhiteboard();
+      }
+    })
+  );
+
+  // Send Message
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("pairprog.sendMessage", async () => {
+      if (hostSession?.isActive) {
+        await hostSession.sendMessage();
+      } else if (clientSession?.isActive) {
+        await clientSession.sendMessage();
+      } else {
+        vscode.window.showWarningMessage("No active pair programming session.");
       }
     })
   );
@@ -241,6 +255,7 @@ export function activate(context: vscode.ExtensionContext) {
         items.push(
           { label: "$(eye) Toggle Follow Mode", description: "" },
           { label: "$(edit) Open Whiteboard", description: "" },
+          { label: "$(comment) Send Message", description: "" },
           { label: "$(copy) Copy Session Address", description: statusBar.getAddress() },
           { label: "$(info) About", description: "" },
           { label: "$(debug-stop) Stop Hosting", description: "" },
@@ -249,6 +264,7 @@ export function activate(context: vscode.ExtensionContext) {
         items.push(
           { label: "$(eye) Toggle Follow Mode", description: "" },
           { label: "$(edit) Open Whiteboard", description: "" },
+          { label: "$(comment) Send Message", description: "" },
           { label: "$(info) About", description: "" },
           { label: "$(debug-disconnect) Disconnect", description: "" },
         );
@@ -270,6 +286,8 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.executeCommand("pairprog.toggleFollowMode");
       } else if (picked.label.includes("Open Whiteboard")) {
         vscode.commands.executeCommand("pairprog.openWhiteboard");
+      } else if (picked.label.includes("Send Message")) {
+        vscode.commands.executeCommand("pairprog.sendMessage");
       } else if (picked.label.includes("Copy Session Address")) {
         await vscode.env.clipboard.writeText(statusBar.getAddress());
         vscode.window.showInformationMessage("Session address copied!");

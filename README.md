@@ -28,7 +28,8 @@ Real-time peer-to-peer pair programming on a shared workspace.
 │  truth for   │  -- Edit confirmed -->  │  to host,    │
 │  all files   │  -- FullSync -------->  │  receives    │
 │              │  -- CursorUpdate <--->  │  confirmed   │
-│  Files saved │  -- FileCreated ----->  │  state back  │
+│              │  -- ChatMessage  <--->  │  state back  │
+│  Files saved │  -- FileCreated ----->  │              │
 │  to disk     │  -- FileDeleted ----->  │              │
 │  HERE only   │  -- FileRenamed ----->  │  No disk     │
 │              │                         │  writes for  │
@@ -60,6 +61,7 @@ Default ignored patterns:
 | `PairProg: Leave Session`          | Disconnect from host           |
 | `PairProg: Toggle Follow Mode`     | Follow your partner around     |
 | `PairProg: Open Whiteboard`        | Open a whiteboard for sketches |
+| `PairProg: Send Message`           | Send a message to your partner (`Ctrl+Shift+M` / `Cmd+Shift+M`) |
 | `PairProg: About`                  | Show the about panel |
 
 Click the status bar item for a quick-pick menu with these options.

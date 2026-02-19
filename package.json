@@ -42,6 +42,17 @@
       {
         "command": "pairprog.openAbout",
         "title": "PairProg: About"
+      },
+      {
+        "command": "pairprog.sendMessage",
+        "title": "PairProg: Send Message"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "pairprog.sendMessage",
+        "key": "ctrl+shift+m",
+        "mac": "cmd+shift+m"
       }
     ],
     "configuration": {

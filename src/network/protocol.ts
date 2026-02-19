@@ -25,6 +25,9 @@ export enum MessageType {
   WhiteboardStroke = "whiteboardStroke",
   WhiteboardClear = "whiteboardClear",
 
+  // Chat
+  ChatMessage = "chatMessage",
+
   // Lifecycle
   Ping = "ping",
   Pong = "pong",
@@ -127,6 +130,11 @@ export interface WhiteboardStrokePayload {
 }
 
 export interface WhiteboardClearPayload {}
+
+export interface ChatMessagePayload {
+  text: string;
+  username: string;
+}
 
 export interface ErrorPayload {
   message: string;

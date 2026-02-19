@@ -15,6 +15,7 @@ import {
   FileSavedPayload,
   createMessage,
   WhiteboardStrokePayload,
+  ChatMessagePayload,
 } from "../network/protocol";
 import { DocumentSync } from "../sync/documentSync";
 import { CursorSync } from "../sync/cursorSync";
@@ -218,6 +219,24 @@ export class ClientSession implements vscode.Disposable {
         }
         break;
 
+      case MessageType.ChatMessage: {
+        const payload = msg.payload as ChatMessagePayload;
+        const text = payload.text ?? "";
+        const sender = payload.username || this.hostUsername || "Host";
+        vscode.window.showInformationMessage(
+          `${sender}: ${text}`,
+          "Copy",
+          "Reply"
+        ).then(async (action) => {
+          if (action === "Copy") {
+            await vscode.env.clipboard.writeText(text);
+          } else if (action === "Reply") {
+            await this.sendMessage();
+          }
+        });
+        break;
+      }
+
       default:
         break;
     }
@@ -287,6 +306,24 @@ export class ClientSession implements vscode.Disposable {
     if (this.whiteboard && !this.whiteboard.disposed) {
       this.whiteboard.reveal();
     }
+  }
+
+  async sendMessage(): Promise<void> {
+    if (!this._sendFn) {
+      vscode.window.showWarningMessage("Not connected to a session.");
+      return;
+    }
+    const text = await vscode.window.showInputBox({
+      prompt: `Send a message to ${this.hostUsername || "host"}`,
+      placeHolder: "Type a message, link, or code snippet...",
+      validateInput: (value) => {
+        if (!value || value.trim().length === 0) { return "Message cannot be empty."; }
+        if (value.length > 500) { return `Too long (${value.length}/500 chars).`; }
+        return null;
+      },
+    });
+    if (!text || text.trim().length === 0) { return; }
+    this._sendFn(createMessage(MessageType.ChatMessage, { text: text.trim(), username: this.username } as ChatMessagePayload));
   }
 
   get isActive(): boolean {
