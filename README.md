@@ -50,6 +50,12 @@ Default ignored patterns:
 ["node_modules/**", ".git/**", "*.lock", "out/**", "dist/**"]
 ```
 
+> **Firewall / network note:** The extension uses two ports:
+> - **9876** (TCP) — WebSocket session traffic (configurable via `pairprog.port`)
+> - **9877** (UDP) — LAN auto-discovery beacon (fixed)
+>
+> Make sure both ports are allowed through your firewall for the extension to work correctly on your network.
+
 ## Commands
 
 | Command | Who | Description |
