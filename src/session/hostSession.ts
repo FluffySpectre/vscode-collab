@@ -246,12 +246,15 @@ export class HostSession implements vscode.Disposable {
         const payload = msg.payload as ChatMessagePayload;
         const text = payload.text ?? "";
         const sender = payload.username || this.clientUsername || "Client";
+        const urlMatch = text.match(/https?:\/\/[^\s]+/);
+        const buttons: string[] = urlMatch ? ["Open Link", "Copy", "Reply"] : ["Copy", "Reply"];
         vscode.window.showInformationMessage(
           `${sender}: ${text}`,
-          "Copy",
-          "Reply"
+          ...buttons
         ).then(async (action) => {
-          if (action === "Copy") {
+          if (action === "Open Link" && urlMatch) {
+            await vscode.env.openExternal(vscode.Uri.parse(urlMatch[0]));
+          } else if (action === "Copy") {
             await vscode.env.clipboard.writeText(text);
           } else if (action === "Reply") {
             await this.sendMessage();
