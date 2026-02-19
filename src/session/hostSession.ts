@@ -12,10 +12,13 @@ import {
   OpenFilePayload,
   createMessage,
   WhiteboardStrokePayload,
+  TerminalInputPayload,
+  TerminalResizePayload,
 } from "../network/protocol";
 import { DocumentSync } from "../sync/documentSync";
 import { CursorSync } from "../sync/cursorSync";
 import { FileOpsSync } from "../sync/fileOpsSync";
+import { TerminalSync } from "../sync/terminalSync";
 import { StatusBar } from "../ui/statusBar";
 import { WhiteboardPanel } from "../ui/whiteboardPanel";
 
@@ -31,6 +34,7 @@ export class HostSession implements vscode.Disposable {
   private documentSync: DocumentSync | null = null;
   private cursorSync: CursorSync | null = null;
   private fileOpsSync: FileOpsSync | null = null;
+  private terminalSync: TerminalSync | null = null;
   private statusBar: StatusBar;
   private whiteboard?: WhiteboardPanel;
   private disposables: vscode.Disposable[] = [];
@@ -232,6 +236,18 @@ export class HostSession implements vscode.Disposable {
         }
         break;
 
+      case MessageType.TerminalInput:
+        this.terminalSync?.handleTerminalInput(
+          msg.payload as TerminalInputPayload
+        );
+        break;
+
+      case MessageType.TerminalResize:
+        this.terminalSync?.handleTerminalResize(
+          msg.payload as TerminalResizePayload
+        );
+        break;
+
       default:
         break;
     }
@@ -265,6 +281,9 @@ export class HostSession implements vscode.Disposable {
     );
     this.fileOpsSync.activate();
 
+    this.terminalSync = new TerminalSync(sendFn, true);
+    this.terminalSync.activate();
+
     this._sendFn = sendFn;
   }
 
@@ -277,6 +296,9 @@ export class HostSession implements vscode.Disposable {
 
     this.fileOpsSync?.dispose();
     this.fileOpsSync = null;
+
+    this.terminalSync?.dispose();
+    this.terminalSync = null;
   }
 
   // Utilities
@@ -304,6 +326,31 @@ export class HostSession implements vscode.Disposable {
 
   private getDefaultUsername(): string {
     return require("os").userInfo().username || "Host";
+  }
+
+  shareTerminal(): void {
+    this.terminalSync?.shareTerminal();
+  }
+
+  async unshareTerminal(): Promise<void> {
+    const terminals = this.terminalSync?.getSharedTerminals() || [];
+    if (terminals.length === 0) {
+      vscode.window.showWarningMessage("No shared terminals to unshare.");
+      return;
+    }
+
+    const items = terminals.map((t) => ({
+      label: t.name,
+      terminalId: t.terminalId,
+    }));
+
+    const picked = await vscode.window.showQuickPick(items, {
+      placeHolder: "Select a terminal to stop sharing",
+    });
+
+    if (picked) {
+      this.terminalSync?.unshareTerminal(picked.terminalId);
+    }
   }
 
   toggleFollowMode(): void {

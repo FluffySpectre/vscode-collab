@@ -23,6 +23,14 @@ export enum MessageType {
   WhiteboardStroke = "whiteboardStroke",
   WhiteboardClear = "whiteboardClear",
 
+  // Terminal sharing
+  TerminalShared = "terminalShared",
+  TerminalOutput = "terminalOutput",
+  TerminalInput = "terminalInput",
+  TerminalResize = "terminalResize",
+  TerminalClosed = "terminalClosed",
+  TerminalUnshared = "terminalUnshared",
+
   // Lifecycle
   Ping = "ping",
   Pong = "pong",
@@ -117,6 +125,39 @@ export interface WhiteboardStrokePayload {
 }
 
 export interface WhiteboardClearPayload {}
+
+// Terminal payloads
+
+export interface TerminalSharedPayload {
+  terminalId: string;
+  name: string;
+  cols: number;
+  rows: number;
+}
+
+export interface TerminalOutputPayload {
+  terminalId: string;
+  data: string;
+}
+
+export interface TerminalInputPayload {
+  terminalId: string;
+  data: string;
+}
+
+export interface TerminalResizePayload {
+  terminalId: string;
+  cols: number;
+  rows: number;
+}
+
+export interface TerminalClosedPayload {
+  terminalId: string;
+}
+
+export interface TerminalUnsharedPayload {
+  terminalId: string;
+}
 
 export interface ErrorPayload {
   message: string;

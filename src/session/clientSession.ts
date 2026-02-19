@@ -14,10 +14,15 @@ import {
   FileRenamedPayload,
   createMessage,
   WhiteboardStrokePayload,
+  TerminalSharedPayload,
+  TerminalOutputPayload,
+  TerminalClosedPayload,
+  TerminalUnsharedPayload,
 } from "../network/protocol";
 import { DocumentSync } from "../sync/documentSync";
 import { CursorSync } from "../sync/cursorSync";
 import { FileOpsSync } from "../sync/fileOpsSync";
+import { TerminalSync } from "../sync/terminalSync";
 import { StatusBar } from "../ui/statusBar";
 import { WhiteboardPanel } from "../ui/whiteboardPanel";
 
@@ -33,6 +38,7 @@ export class ClientSession implements vscode.Disposable {
   private documentSync: DocumentSync | null = null;
   private cursorSync: CursorSync | null = null;
   private fileOpsSync: FileOpsSync | null = null;
+  private terminalSync: TerminalSync | null = null;
   private statusBar: StatusBar;
   private whiteboard?: WhiteboardPanel;
   private disposables: vscode.Disposable[] = [];
@@ -209,6 +215,30 @@ export class ClientSession implements vscode.Disposable {
         }
         break;
 
+      case MessageType.TerminalShared:
+        this.terminalSync?.handleTerminalShared(
+          msg.payload as TerminalSharedPayload
+        );
+        break;
+
+      case MessageType.TerminalOutput:
+        this.terminalSync?.handleTerminalOutput(
+          msg.payload as TerminalOutputPayload
+        );
+        break;
+
+      case MessageType.TerminalClosed:
+        this.terminalSync?.handleTerminalClosed(
+          msg.payload as TerminalClosedPayload
+        );
+        break;
+
+      case MessageType.TerminalUnshared:
+        this.terminalSync?.handleTerminalUnshared(
+          msg.payload as TerminalUnsharedPayload
+        );
+        break;
+
       default:
         break;
     }
@@ -242,6 +272,9 @@ export class ClientSession implements vscode.Disposable {
       ignored
     );
     this.fileOpsSync.activate();
+
+    this.terminalSync = new TerminalSync(sendFn, false);
+    this.terminalSync.activate();
   }
 
   private teardownSync(): void {
@@ -253,6 +286,9 @@ export class ClientSession implements vscode.Disposable {
 
     this.fileOpsSync?.dispose();
     this.fileOpsSync = null;
+
+    this.terminalSync?.dispose();
+    this.terminalSync = null;
   }
 
   // Utilities

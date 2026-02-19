@@ -3,7 +3,7 @@
   "displayName": "VSCode Pair Prog",
   "description": "Real-time peer-to-peer pair programming on a shared workspace.",
   "icon": "icon.png",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "publisher": "bjoernbosse",
   "repository": "https://github.com/FluffySpectre/vscode-pair-prog",
   "engines": {
@@ -42,6 +42,14 @@
       {
         "command": "pairprog.openAbout",
         "title": "PairProg: About"
+      },
+      {
+        "command": "pairprog.shareTerminal",
+        "title": "PairProg: Share Terminal"
+      },
+      {
+        "command": "pairprog.unshareTerminal",
+        "title": "PairProg: Unshare Terminal"
       }
     ],
     "configuration": {
