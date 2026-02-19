@@ -52,15 +52,20 @@ Default ignored patterns:
 
 ## Commands
 
-| Command                          | Description                    |
-|----------------------------------|--------------------------------|
-| `PairProg: Start Hosting Session`  | Start a WebSocket server       |
-| `PairProg: Stop Hosting Session`   | Stop hosting and disconnect    |
-| `PairProg: Join Session`           | Connect to a host              |
-| `PairProg: Leave Session`          | Disconnect from host           |
-| `PairProg: Toggle Follow Mode`     | Follow your partner around     |
-| `PairProg: Open Whiteboard`        | Open a whiteboard for sketches |
-| `PairProg: About`                  | Show the about panel |
+| Command | Who | Description |
+|---|---|---|
+| `PairProg: Start Hosting Session` | Host | Start a WebSocket server |
+| `PairProg: Stop Hosting Session` | Host | Stop hosting and disconnect |
+| `PairProg: Join Session` | Client | Connect to a host |
+| `PairProg: Leave Session` | Client | Disconnect from host |
+| `PairProg: Toggle Follow Mode` | Both | Follow your partner's cursor |
+| `PairProg: Open Whiteboard` | Both | Open a shared whiteboard |
+| `PairProg: Share Terminal` | Host | Share a terminal with the client (read-only by default) |
+| `PairProg: Unshare Terminal` | Host | Stop sharing a terminal |
+| `PairProg: Grant/Revoke Terminal Write Access` | Host | Toggle write access for the client on a shared terminal |
+| `PairProg: About` | Both | Show the about panel |
+
+> **Shared terminals** are read-only for the client by default. Use *Grant/Revoke Terminal Write Access* to allow the client to type in the terminal. The host can revoke write access at any time.
 
 Click the status bar item for a quick-pick menu with these options.
 
