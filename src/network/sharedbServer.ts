@@ -18,7 +18,13 @@ export class ShareDBServer {
   constructor(pairProgServer: PairProgServer) {
     this.backend = new ShareDB();
 
-    this.wss = new ws.Server({ noServer: true });
+    this.wss = new ws.Server({
+      noServer: true,
+      perMessageDeflate: {
+        zlibDeflateOptions: { level: 6 },
+        threshold: 256,
+      },
+    });
     this.wss.on("connection", (socket) => {
       const stream = new WebSocketJSONStream(socket);
       this.backend.listen(stream);

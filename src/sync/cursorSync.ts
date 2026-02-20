@@ -27,7 +27,7 @@ export class CursorSync implements vscode.Disposable, vscode.FileDecorationProvi
   private localFileUri: vscode.Uri | null = null;    // our own active file (for "being followed" badge)
 
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
-  private readonly DEBOUNCE_MS = 50;
+  private readonly DEBOUNCE_MS = 150;
 
   private highlightColor: string;
 
