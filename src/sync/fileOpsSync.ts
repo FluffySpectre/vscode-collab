@@ -159,7 +159,13 @@ export class FileOpsSync implements vscode.Disposable {
 
   async handleFileRenamed(payload: FileRenamedPayload): Promise<void> {
     if (this.vfsProvider) {
+      const affectedTabs = this.collectTabsUnderPath(payload.oldPath);
+
+      await this.saveDirtyTabs(affectedTabs);
+
       this.vfsProvider.applyFileRenamed(payload.oldPath, payload.newPath);
+
+      await this.reopenMovedTabs(affectedTabs, payload.oldPath, payload.newPath);
       return;
     }
 
@@ -173,6 +179,103 @@ export class FileOpsSync implements vscode.Disposable {
       // Source might not exist locally - skip
     } finally {
       this.remoteOpGuard--;
+    }
+  }
+
+  private async saveDirtyTabs(tabs: vscode.Tab[]): Promise<void> {
+    for (const tab of tabs) {
+      if (!(tab.input instanceof vscode.TabInputText)) { continue; }
+      const uri = tab.input.uri;
+      const doc = vscode.workspace.textDocuments.find(d => d.uri.toString() === uri.toString());
+      if (doc?.isDirty) {
+        await doc.save();
+      }
+    }
+  }
+
+  private collectTabsUnderPath(relPath: string): vscode.Tab[] {
+    const wsFolder = vscode.workspace.workspaceFolders?.find(
+      (f) => f.uri.scheme === "pairprog"
+    );
+    if (!wsFolder) { return []; }
+
+    const wsFolderPath = wsFolder.uri.path;
+    const childPrefix = relPath + "/";
+    const affected: vscode.Tab[] = [];
+
+    for (const group of vscode.window.tabGroups.all) {
+      for (const tab of group.tabs) {
+        if (!(tab.input instanceof vscode.TabInputText)) { continue; }
+        if (tab.input.uri.scheme !== "pairprog") { continue; }
+
+        // Convert absolute VFS URI path to workspace-relative path
+        const tabRelPath = tab.input.uri.path.slice(wsFolderPath.length + 1);
+        // Match both direct children of a renamed folder AND an exact-matched renamed file
+        if (tabRelPath === relPath || tabRelPath.startsWith(childPrefix)) {
+          affected.push(tab);
+        }
+      }
+    }
+
+    return affected;
+  }
+
+  private async reopenMovedTabs(
+    tabs: vscode.Tab[],
+    oldRelPath: string,
+    newRelPath: string
+  ): Promise<void> {
+    if (tabs.length === 0) { return; }
+
+    const wsFolder = vscode.workspace.workspaceFolders?.find(
+      (f) => f.uri.scheme === "pairprog"
+    );
+    if (!wsFolder) { return; }
+
+    const wsFolderPath = wsFolder.uri.path;
+
+    type Snapshot = {
+      oldUriStr: string;
+      newUri: vscode.Uri;
+      viewColumn: vscode.ViewColumn;
+      wasActive: boolean;
+    };
+    const snapshots: Snapshot[] = [];
+
+    for (const tab of tabs) {
+      if (!(tab.input instanceof vscode.TabInputText)) { continue; }
+      const tabRelPath = tab.input.uri.path.slice(wsFolderPath.length + 1);
+      const newTabRelPath = newRelPath + tabRelPath.slice(oldRelPath.length);
+      snapshots.push({
+        oldUriStr: tab.input.uri.toString(),
+        newUri: vscode.Uri.joinPath(wsFolder.uri, newTabRelPath),
+        viewColumn: tab.group.viewColumn,
+        wasActive: tab.isActive,
+      });
+    }
+
+    // Open new tabs (tree is already updated so readFile works).
+    for (const { newUri, viewColumn, wasActive } of snapshots) {
+      await vscode.window.showTextDocument(newUri, {
+        preview: false,
+        preserveFocus: !wasActive,
+        viewColumn,
+      });
+    }
+
+    const oldUriStrings = new Set(snapshots.map(s => s.oldUriStr));
+    const freshTabs: vscode.Tab[] = [];
+    for (const group of vscode.window.tabGroups.all) {
+      for (const tab of group.tabs) {
+        if (tab.input instanceof vscode.TabInputText &&
+            oldUriStrings.has(tab.input.uri.toString())) {
+          freshTabs.push(tab);
+        }
+      }
+    }
+
+    if (freshTabs.length > 0) {
+      await vscode.window.tabGroups.close(freshTabs);
     }
   }
 
