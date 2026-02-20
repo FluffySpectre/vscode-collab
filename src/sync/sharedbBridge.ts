@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { Connection, Doc } from "sharedb/lib/client";
+import { type as otText } from "ot-text";
 import { toRelativePath, toAbsoluteUri } from "../utils/pathUtils";
 
 type OtTextSkip = number;
@@ -16,6 +17,9 @@ export class ShareDBBridge implements vscode.Disposable {
   private docs: Map<string, Doc<string>> = new Map();
   private remoteEditGuard = 0;
   private disposables: vscode.Disposable[] = [];
+  private pendingOps: Map<string, OtTextOp> = new Map();
+  private batchTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  private readonly BATCH_WINDOW_MS = 50;
 
   constructor(connection: Connection) {
     this.connection = connection;
@@ -126,7 +130,7 @@ export class ShareDBBridge implements vscode.Disposable {
     for (const change of e.contentChanges) {
       const op = this.changeToOp(doc.data, change);
       if (op.length > 0) {
-        doc.submitOp(op, { source: true });
+        this.scheduleOp(filePath, doc, op);
       }
     }
   }
@@ -154,6 +158,32 @@ export class ShareDBBridge implements vscode.Disposable {
     }
 
     return op;
+  }
+
+  // Batch local ops before submitting to reduce round-trips
+
+  private scheduleOp(filePath: string, doc: Doc<string>, op: OtTextOp): void {
+    // Compose the new op onto any already-pending op for this file
+    const existing = this.pendingOps.get(filePath);
+    this.pendingOps.set(filePath, existing ? otText.compose(existing, op) : op);
+
+    // Reset the flush timer
+    const existingTimer = this.batchTimers.get(filePath);
+    if (existingTimer !== undefined) {
+      clearTimeout(existingTimer);
+    }
+    this.batchTimers.set(
+      filePath,
+      setTimeout(() => this.flushOp(filePath, doc), this.BATCH_WINDOW_MS)
+    );
+  }
+
+  private flushOp(filePath: string, doc: Doc<string>): void {
+    this.batchTimers.delete(filePath);
+    const op = this.pendingOps.get(filePath);
+    if (!op) { return; }
+    this.pendingOps.delete(filePath);
+    doc.submitOp(op, { source: true });
   }
 
   // Remote ShareDB ops -> VS Code WorkspaceEdits
@@ -242,6 +272,13 @@ export class ShareDBBridge implements vscode.Disposable {
   }
 
   dispose(): void {
+    // Cancel all pending batch timers and discard unflushed ops
+    for (const timer of this.batchTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.batchTimers.clear();
+    this.pendingOps.clear();
+
     for (const doc of this.docs.values()) {
       doc.unsubscribe();
       doc.destroy();
