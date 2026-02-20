@@ -27,7 +27,7 @@ export class WhiteboardPanel {
       { enableScripts: true }
     );
 
-    const htmlPath = path.join(context.extensionPath, "src", "ui", "webviews", "whiteboard.html");
+    const htmlPath = path.join(context.extensionPath, "media", "webviews", "whiteboard.html");
     const nonce = getNonce();
     this.panel.webview.html = fs.readFileSync(htmlPath, "utf-8")
       .replace(/\{\{nonce\}\}/g, nonce);

@@ -26,7 +26,7 @@ export class AboutPanel {
       { enableScripts: false }
     );
 
-    const htmlPath = path.join(context.extensionPath, "src", "ui", "webviews", "about.html");
+    const htmlPath = path.join(context.extensionPath, "media", "webviews", "about.html");
     const template = fs.readFileSync(htmlPath, "utf-8");
     this.panel.webview.html = template
       .replace("{{name}}", pkg.displayName ?? "")
