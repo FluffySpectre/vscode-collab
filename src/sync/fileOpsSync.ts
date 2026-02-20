@@ -8,11 +8,12 @@ import {
   createMessage,
 } from "../network/protocol";
 import { toRelativePathFromRoot, toAbsoluteUri } from "../utils/pathUtils";
+import { PairProgFileSystemProvider } from "../vfs/pairProgFileSystemProvider";
 
 /**
  * FileOpsSync watches for file create/delete/rename events on the host
  * and propagates them to the client. On the client side, it applies
- * those operations to keep the workspace structure in sync.
+ * those operations to the virtual filesystem (or disk if no VFS).
  */
 export class FileOpsSync implements vscode.Disposable {
   private disposables: vscode.Disposable[] = [];
@@ -21,17 +22,20 @@ export class FileOpsSync implements vscode.Disposable {
   private workspaceRoot: string;
   private remoteOpGuard = 0;
   private ignoredPatterns: string[];
+  private vfsProvider?: PairProgFileSystemProvider;
 
   constructor(
     sendFn: (msg: Message) => void,
     isHost: boolean,
     workspaceRoot: string,
-    ignoredPatterns: string[]
+    ignoredPatterns: string[],
+    vfsProvider?: PairProgFileSystemProvider
   ) {
     this.sendFn = sendFn;
     this.isHost = isHost;
     this.workspaceRoot = workspaceRoot;
     this.ignoredPatterns = ignoredPatterns;
+    this.vfsProvider = vfsProvider;
   }
 
   // Activation
@@ -112,18 +116,21 @@ export class FileOpsSync implements vscode.Disposable {
   // Client: Apply Remote File Operations
 
   async handleFileCreated(payload: FileCreatedPayload): Promise<void> {
-    const uri = toAbsoluteUri(payload.filePath);
+    if (this.vfsProvider) {
+      this.vfsProvider.applyFileCreated(payload.filePath, payload.content);
+      return;
+    }
 
+    // Fallback: write to disk (legacy behavior)
+    const uri = toAbsoluteUri(payload.filePath);
     this.remoteOpGuard++;
     try {
-      // Ensure parent directory exists
       const dir = vscode.Uri.joinPath(uri, "..");
       try {
         await vscode.workspace.fs.createDirectory(dir);
       } catch {
         // Directory might already exist
       }
-
       const content = Buffer.from(payload.content, "utf-8");
       await vscode.workspace.fs.writeFile(uri, content);
     } finally {
@@ -132,8 +139,13 @@ export class FileOpsSync implements vscode.Disposable {
   }
 
   async handleFileDeleted(payload: FileDeletedPayload): Promise<void> {
-    const uri = toAbsoluteUri(payload.filePath);
+    if (this.vfsProvider) {
+      this.vfsProvider.applyFileDeleted(payload.filePath);
+      return;
+    }
 
+    // Fallback: delete from disk (legacy behavior)
+    const uri = toAbsoluteUri(payload.filePath);
     this.remoteOpGuard++;
     try {
       await vscode.workspace.fs.delete(uri, { recursive: false });
@@ -145,9 +157,14 @@ export class FileOpsSync implements vscode.Disposable {
   }
 
   async handleFileRenamed(payload: FileRenamedPayload): Promise<void> {
+    if (this.vfsProvider) {
+      this.vfsProvider.applyFileRenamed(payload.oldPath, payload.newPath);
+      return;
+    }
+
+    // Fallback: rename on disk (legacy behavior)
     const oldUri = toAbsoluteUri(payload.oldPath);
     const newUri = toAbsoluteUri(payload.newPath);
-
     this.remoteOpGuard++;
     try {
       await vscode.workspace.fs.rename(oldUri, newUri, { overwrite: false });
