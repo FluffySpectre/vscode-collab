@@ -177,7 +177,7 @@ export class PairProgFileSystemProvider implements vscode.FileSystemProvider {
     return new Uint8Array(0);
   }
 
-  writeFile(uri: vscode.Uri, content: Uint8Array, _options: { create: boolean; overwrite: boolean }): void {
+  writeFile(uri: vscode.Uri, content: Uint8Array, options: { create: boolean; overwrite: boolean }): void {
     const entryPath = this.uriToPath(uri);
 
     // Update in-memory cache only - host is source of truth
@@ -186,41 +186,21 @@ export class PairProgFileSystemProvider implements vscode.FileSystemProvider {
       existing.content = content;
       existing.size = content.length;
       existing.mtime = Date.now();
-    } else {
-      this.ensureParentDirs(entryPath);
-      this.tree.set(entryPath, {
-        type: vscode.FileType.File,
-        size: content.length,
-        mtime: Date.now(),
-        content,
-      });
+    } else if (options.create) {
+      throw vscode.FileSystemError.NoPermissions("File creation must be performed on the host.");
     }
   }
 
-  delete(uri: vscode.Uri): void {
-    const entryPath = this.uriToPath(uri);
-    this.tree.delete(entryPath);
+  delete(_uri: vscode.Uri): void {
+    throw vscode.FileSystemError.NoPermissions("File deletion must be performed on the host.");
   }
 
-  rename(oldUri: vscode.Uri, newUri: vscode.Uri): void {
-    const oldPath = this.uriToPath(oldUri);
-    const newPath = this.uriToPath(newUri);
-    const entry = this.tree.get(oldPath);
-    if (entry) {
-      this.tree.delete(oldPath);
-      this.tree.set(newPath, entry);
-    }
+  rename(_oldUri: vscode.Uri, _newUri: vscode.Uri): void {
+    throw vscode.FileSystemError.NoPermissions("File renaming must be performed on the host.");
   }
 
-  createDirectory(uri: vscode.Uri): void {
-    const dirPath = this.uriToPath(uri);
-    if (!this.tree.has(dirPath)) {
-      this.tree.set(dirPath, {
-        type: vscode.FileType.Directory,
-        size: 0,
-        mtime: Date.now(),
-      });
-    }
+  createDirectory(_uri: vscode.Uri): void {
+    throw vscode.FileSystemError.NoPermissions("Directory creation must be performed on the host.");
   }
 
   watch(): vscode.Disposable {
