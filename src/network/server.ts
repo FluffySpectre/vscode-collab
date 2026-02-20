@@ -24,8 +24,8 @@ export class PairProgServer extends EventEmitter {
   private client: ws.WebSocket | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private missedPings = 0;
-  private readonly MAX_MISSED_PINGS = 3;
-  private readonly PING_INTERVAL_MS = 5000;
+  private readonly MAX_MISSED_PINGS = 5;
+  private readonly PING_INTERVAL_MS = 10000;
 
   get isRunning(): boolean {
     return this.wsServer !== null;
@@ -44,7 +44,13 @@ export class PairProgServer extends EventEmitter {
   async start(port: number): Promise<string> {
     return new Promise((resolve, reject) => {
       this._httpServer = http.createServer();
-      this.wsServer = new ws.Server({ noServer: true });
+      this.wsServer = new ws.Server({
+        noServer: true,
+        perMessageDeflate: {
+          zlibDeflateOptions: { level: 6 },
+          threshold: 256,
+        },
+      });
 
       this._httpServer.on("error", (err) => {
         this.emit("error", err);

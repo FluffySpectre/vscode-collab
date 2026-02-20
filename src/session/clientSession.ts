@@ -217,7 +217,12 @@ export class ClientSession implements vscode.Disposable {
     const sendFn = (msg: Message) => this.client.send(msg);
     this._sendFn = sendFn;
 
-    this.sharedbSocket = new ws.WebSocket(`ws://${this.address}/sharedb`);
+    this.sharedbSocket = new ws.WebSocket(`ws://${this.address}/sharedb`, {
+      perMessageDeflate: {
+        zlibDeflateOptions: { level: 6 },
+        threshold: 256,
+      },
+    });
     const sharedbConnection = new ShareDBClient.Connection(this.sharedbSocket);
 
     this.sharedbBridge = new ShareDBBridge(sharedbConnection);

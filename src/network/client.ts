@@ -47,7 +47,12 @@ export class PairProgClient extends EventEmitter {
   private doConnect(): Promise<void> {
     return new Promise((resolve, reject) => {
       const url = `ws://${this.address}`;
-      this.socket = new ws.WebSocket(url);
+      this.socket = new ws.WebSocket(url, {
+        perMessageDeflate: {
+          zlibDeflateOptions: { level: 6 },
+          threshold: 256,
+        },
+      });
 
       const onOpen = () => {
         this.reconnectAttempts = 0;
