@@ -140,16 +140,20 @@ export class ShareDBBridge implements vscode.Disposable {
     preText: string,
     change: vscode.TextDocumentContentChangeEvent
   ): OtTextOp {
+    const docLen = preText.length; // UTF-16 code unit count
+    const offset = Math.min(change.rangeOffset, docLen);
+    const deleteLen = Math.min(change.rangeLength, docLen - offset);
+
     const op: OtTextOp = [];
 
     // Skip to the change position
-    if (change.rangeOffset > 0) {
-      op.push(change.rangeOffset);
+    if (offset > 0) {
+      op.push(offset);
     }
 
     // Delete replaced characters
-    if (change.rangeLength > 0) {
-      op.push({ d: change.rangeLength });
+    if (deleteLen > 0) {
+      op.push({ d: deleteLen });
     }
 
     // Insert new text

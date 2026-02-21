@@ -82,7 +82,7 @@ export class CursorSync implements vscode.Disposable, vscode.FileDecorationProvi
         fontStyle: "normal",
         fontWeight: "bold",
         margin: "0 0 0 1em",
-        textDecoration: "none; position: sticky; float: right; padding: 0 6px; border-radius: 3px; font-size: 0.85em;",
+        textDecoration: "none; padding: 0 6px; border-radius: 3px; font-size: 0.85em;",
       },
     });
   }
@@ -351,6 +351,11 @@ export class CursorSync implements vscode.Disposable, vscode.FileDecorationProvi
     const usernameLabelDecorations: vscode.DecorationOptions[] = [];
 
     for (const cursor of this.remoteCursors.cursors) {
+      // Skip invalid cursor positions
+      if (cursor.position.line >= editor.document.lineCount) {
+        continue;
+      }
+
       // Cursor position decoration
       const pos = new vscode.Position(
         cursor.position.line,
