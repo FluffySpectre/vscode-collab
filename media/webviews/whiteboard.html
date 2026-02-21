@@ -89,15 +89,16 @@ let currentPoints = [];
 let previewEntity = null;
 
 // Selection state
-let selectedId = null;
-let dragMode = null; // null | "move" | "resize-nw" | "resize-ne" | "resize-sw" | "resize-se"
-let dragOffset = { x: 0, y: 0 };
+let selectedIds = new Set(); // multi-selection
+let dragMode = null; // null | "move" | "resize-nw" | "resize-ne" | "resize-sw" | "resize-se" | "rubber-band"
+let dragStartPositions = null; // Map<id, entitySnapshot> used during move
 let resizeAnchor = null;
 let resizeStartBounds = null;
 let resizeStartEntity = null;
+let rubberBandRect = null; // { x, y, w, h } while rubber-banding
 
 // Copy/paste state
-let clipboard = null;
+let clipboard = null; // array of entity snapshots
 let pasteOffset = 0;
 
 const HANDLE_SIZE = 8;
@@ -110,7 +111,7 @@ widthSlider.addEventListener("input", e => { currentWidth = parseInt(e.target.va
 
 function setTool(tool) {
   currentTool = tool;
-  if (tool !== "select") { selectedId = null; redrawAll(); }
+  if (tool !== "select") { selectedIds.clear(); redrawAll(); }
   document.querySelectorAll(".tool-btn").forEach(btn => {
     btn.classList.toggle("active", btn.dataset.tool === tool);
   });
@@ -222,7 +223,8 @@ function drawEntity(e) {
   }
 }
 
-function drawSelectionBox(e) {
+// showHandles = true only when exactly one entity is selected (resize corners)
+function drawSelectionBox(e, showHandles) {
   const b = getEntityBounds(e);
   ctx.save();
   ctx.setLineDash([4, 4]);
@@ -230,14 +232,15 @@ function drawSelectionBox(e) {
   ctx.lineWidth = 1;
   ctx.strokeRect(b.x - 4, b.y - 4, b.w + 8, b.h + 8);
   ctx.setLineDash([]);
-
-  const corners = getCorners({ x: b.x - 4, y: b.y - 4, w: b.w + 8, h: b.h + 8 });
-  for (const c of corners) {
-    ctx.fillStyle = "#ffffff";
-    ctx.strokeStyle = "#4fc3f7";
-    ctx.lineWidth = 1;
-    ctx.fillRect(c.x - HANDLE_SIZE / 2, c.y - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
-    ctx.strokeRect(c.x - HANDLE_SIZE / 2, c.y - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
+  if (showHandles) {
+    const corners = getCorners({ x: b.x - 4, y: b.y - 4, w: b.w + 8, h: b.h + 8 });
+    for (const c of corners) {
+      ctx.fillStyle = "#ffffff";
+      ctx.strokeStyle = "#4fc3f7";
+      ctx.lineWidth = 1;
+      ctx.fillRect(c.x - HANDLE_SIZE / 2, c.y - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
+      ctx.strokeRect(c.x - HANDLE_SIZE / 2, c.y - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
+    }
   }
   ctx.restore();
 }
@@ -250,12 +253,28 @@ function redrawAll() {
   if (previewEntity) {
     drawEntity(previewEntity);
   }
-  if (selectedId && entities.has(selectedId)) {
-    drawSelectionBox(entities.get(selectedId));
+  // Draw selection outlines (resize handles only for single-selection)
+  const showHandles = selectedIds.size === 1;
+  for (const id of selectedIds) {
+    if (entities.has(id)) {
+      drawSelectionBox(entities.get(id), showHandles);
+    }
+  }
+  // Draw rubber-band selection rectangle
+  if (rubberBandRect) {
+    ctx.save();
+    ctx.setLineDash([4, 4]);
+    ctx.strokeStyle = "#4fc3f7";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(rubberBandRect.x, rubberBandRect.y, rubberBandRect.w, rubberBandRect.h);
+    ctx.fillStyle = "rgba(79, 195, 247, 0.05)";
+    ctx.fillRect(rubberBandRect.x, rubberBandRect.y, rubberBandRect.w, rubberBandRect.h);
+    ctx.setLineDash([]);
+    ctx.restore();
   }
 }
 
-// --- Resize ---
+// --- Canvas resize ---
 function resize() {
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight;
@@ -320,6 +339,19 @@ function hitTestHandle(px, py, e) {
   return null;
 }
 
+// Returns ids of all entities whose bounding box overlaps the given rect
+function entitiesInRect(rx, ry, rw, rh) {
+  const x1 = rx, y1 = ry, x2 = rx + rw, y2 = ry + rh;
+  const result = [];
+  for (const e of entities.values()) {
+    const b = getEntityBounds(e);
+    if (b.x < x2 && b.x + b.w > x1 && b.y < y2 && b.y + b.h > y1) {
+      result.push(e.id);
+    }
+  }
+  return result;
+}
+
 // --- Measure text for bounding box ---
 function measureText(text, fontSize) {
   ctx.font = fontSize + "px sans-serif";
@@ -330,7 +362,6 @@ function measureText(text, fontSize) {
 // --- Inline text input (prompt() is blocked in sandboxed webviews) ---
 const textInputEl = document.getElementById("textInput");
 let textInputCallback = null;
-
 let textInputReady = false;
 
 function showTextInput(x, y, defaultValue, fontSize, color, callback) {
@@ -381,37 +412,60 @@ canvas.addEventListener("pointerdown", e => {
   }
 
   if (currentTool === "select") {
-    // Check resize handle first
-    if (selectedId && entities.has(selectedId)) {
-      const handle = hitTestHandle(px, py, entities.get(selectedId));
-      if (handle) {
-        isDragging = true;
-        dragMode = handle;
-        const ent = entities.get(selectedId);
-        resizeStartBounds = getEntityBounds(ent);
-        resizeStartEntity = JSON.parse(JSON.stringify(ent));
-        // Anchor is the opposite corner
-        const cornerIdx = ["resize-nw", "resize-ne", "resize-se", "resize-sw"].indexOf(handle);
-        const oppositeIdx = (cornerIdx + 2) % 4;
-        const corners = getCorners(resizeStartBounds);
-        resizeAnchor = corners[oppositeIdx];
-        return;
+    // 1. Resize handle - only when exactly one entity is selected
+    if (selectedIds.size === 1) {
+      const singleId = [...selectedIds][0];
+      const singleEnt = entities.get(singleId);
+      if (singleEnt) {
+        const handle = hitTestHandle(px, py, singleEnt);
+        if (handle) {
+          isDragging = true;
+          dragMode = handle;
+          resizeStartBounds = getEntityBounds(singleEnt);
+          resizeStartEntity = JSON.parse(JSON.stringify(singleEnt));
+          const cornerIdx = ["resize-nw", "resize-ne", "resize-se", "resize-sw"].indexOf(handle);
+          const oppositeIdx = (cornerIdx + 2) % 4;
+          resizeAnchor = getCorners(resizeStartBounds)[oppositeIdx];
+          return;
+        }
       }
     }
-    // Hit test entities
+
+    // 2. Hit-test entities
     const hitId = hitTest(px, py);
     if (hitId) {
-      selectedId = hitId;
-      isDragging = true;
-      dragMode = "move";
-      const ent = entities.get(hitId);
-      const b = getEntityBounds(ent);
-      dragOffset = { x: px - b.x, y: py - b.y };
-      redrawAll();
+      if (e.shiftKey) {
+        // Shift-click: toggle entity in/out of selection, no drag
+        if (selectedIds.has(hitId)) {
+          selectedIds.delete(hitId);
+        } else {
+          selectedIds.add(hitId);
+        }
+        redrawAll();
+      } else {
+        // Plain click: if not in selection replace it; then start moving all selected
+        if (!selectedIds.has(hitId)) {
+          selectedIds = new Set([hitId]);
+        }
+        isDragging = true;
+        dragMode = "move";
+        dragStart = { x: px, y: py };
+        dragStartPositions = new Map();
+        for (const id of selectedIds) {
+          if (entities.has(id)) {
+            dragStartPositions.set(id, JSON.parse(JSON.stringify(entities.get(id))));
+          }
+        }
+        redrawAll();
+      }
     } else {
-      selectedId = null;
-      isDragging = false;
-      dragMode = null;
+      // Click on empty canvas
+      if (!e.shiftKey) { selectedIds.clear(); }
+      // Start rubber-band selection
+      isDragging = true;
+      dragMode = "rubber-band";
+      dragStart = { x: px, y: py };
+      rubberBandRect = { x: px, y: py, w: 0, h: 0 };
       redrawAll();
     }
     return;
@@ -449,24 +503,36 @@ canvas.addEventListener("pointermove", e => {
   const px = e.offsetX, py = e.offsetY;
 
   if (currentTool === "select") {
-    if (dragMode === "move" && selectedId && entities.has(selectedId)) {
-      const ent = entities.get(selectedId);
-      const newX = px - dragOffset.x;
-      const newY = py - dragOffset.y;
-      if (ent.type === "line" || ent.type === "arrow") {
-        const dx = newX - Math.min(ent.x1, ent.x2);
-        const dy = newY - Math.min(ent.y1, ent.y2);
-        ent.x1 += dx; ent.y1 += dy;
-        ent.x2 += dx; ent.y2 += dy;
-        ent.x = Math.min(ent.x1, ent.x2);
-        ent.y = Math.min(ent.y1, ent.y2);
-      } else {
-        ent.x = newX;
-        ent.y = newY;
+    if (dragMode === "move") {
+      const dx = px - dragStart.x;
+      const dy = py - dragStart.y;
+      for (const [id, orig] of dragStartPositions) {
+        const ent = entities.get(id);
+        if (!ent) continue;
+        if (ent.type === "line" || ent.type === "arrow") {
+          ent.x1 = orig.x1 + dx; ent.y1 = orig.y1 + dy;
+          ent.x2 = orig.x2 + dx; ent.y2 = orig.y2 + dy;
+          ent.x = Math.min(ent.x1, ent.x2);
+          ent.y = Math.min(ent.y1, ent.y2);
+        } else {
+          ent.x = orig.x + dx;
+          ent.y = orig.y + dy;
+        }
       }
       redrawAll();
-    } else if (dragMode && dragMode.startsWith("resize-") && selectedId && entities.has(selectedId)) {
-      const ent = entities.get(selectedId);
+    } else if (dragMode === "rubber-band") {
+      rubberBandRect = {
+        x: Math.min(dragStart.x, px),
+        y: Math.min(dragStart.y, py),
+        w: Math.abs(px - dragStart.x),
+        h: Math.abs(py - dragStart.y),
+      };
+      redrawAll();
+    } else if (dragMode && dragMode.startsWith("resize-")) {
+      const singleId = [...selectedIds][0];
+      if (!singleId) return;
+      const ent = entities.get(singleId);
+      if (!ent) return;
       const anchor = resizeAnchor;
       const newX = Math.min(anchor.x, px);
       const newY = Math.min(anchor.y, py);
@@ -478,14 +544,9 @@ canvas.addEventListener("pointermove", e => {
         const scaleX = oldB.w > 0 ? newW / oldB.w : 1;
         const scaleY = oldB.h > 0 ? newH / oldB.h : 1;
         const orig = resizeStartEntity;
-        ent.x = newX;
-        ent.y = newY;
-        ent.width = newW;
-        ent.height = newH;
-        ent.points = orig.points.map(p => ({
-          x: p.x * scaleX,
-          y: p.y * scaleY,
-        }));
+        ent.x = newX; ent.y = newY;
+        ent.width = newW; ent.height = newH;
+        ent.points = orig.points.map(p => ({ x: p.x * scaleX, y: p.y * scaleY }));
       } else if (ent.type === "line" || ent.type === "arrow") {
         const oldB = resizeStartBounds;
         const scaleX = oldB.w > 0 ? newW / oldB.w : 1;
@@ -567,30 +628,51 @@ canvas.addEventListener("pointermove", e => {
   }
 });
 
+function buildChanges(ent) {
+  if (ent.type === "line" || ent.type === "arrow") {
+    return { x: ent.x, y: ent.y, width: ent.width, height: ent.height, x1: ent.x1, y1: ent.y1, x2: ent.x2, y2: ent.y2 };
+  } else if (ent.type === "stroke") {
+    return { x: ent.x, y: ent.y, width: ent.width, height: ent.height, points: ent.points };
+  } else if (ent.type === "text") {
+    return { x: ent.x, y: ent.y, width: ent.width, height: ent.height, fontSize: ent.fontSize };
+  }
+  return { x: ent.x, y: ent.y, width: ent.width, height: ent.height };
+}
+
 function finishDrag(e) {
   if (!isDragging) return;
   isDragging = false;
   const px = e.offsetX, py = e.offsetY;
 
   if (currentTool === "select") {
-    if ((dragMode === "move" || (dragMode && dragMode.startsWith("resize-"))) && selectedId && entities.has(selectedId)) {
-      const ent = entities.get(selectedId);
-      const changes = {};
-      if (ent.type === "line" || ent.type === "arrow") {
-        Object.assign(changes, { x: ent.x, y: ent.y, width: ent.width, height: ent.height, x1: ent.x1, y1: ent.y1, x2: ent.x2, y2: ent.y2 });
-      } else if (ent.type === "stroke") {
-        Object.assign(changes, { x: ent.x, y: ent.y, width: ent.width, height: ent.height, points: ent.points });
-      } else if (ent.type === "text") {
-        Object.assign(changes, { x: ent.x, y: ent.y, width: ent.width, height: ent.height, fontSize: ent.fontSize });
-      } else {
-        Object.assign(changes, { x: ent.x, y: ent.y, width: ent.width, height: ent.height });
+    if (dragMode === "move") {
+      for (const id of selectedIds) {
+        const ent = entities.get(id);
+        if (ent) vscode.postMessage({ type: "entityUpdate", payload: { id, changes: buildChanges(ent) } });
       }
-      vscode.postMessage({ type: "entityUpdate", payload: { id: selectedId, changes } });
+    } else if (dragMode && dragMode.startsWith("resize-")) {
+      const singleId = [...selectedIds][0];
+      if (singleId && entities.has(singleId)) {
+        const ent = entities.get(singleId);
+        vscode.postMessage({ type: "entityUpdate", payload: { id: singleId, changes: buildChanges(ent) } });
+      }
+    } else if (dragMode === "rubber-band") {
+      if (rubberBandRect && rubberBandRect.w > 2 && rubberBandRect.h > 2) {
+        const ids = entitiesInRect(rubberBandRect.x, rubberBandRect.y, rubberBandRect.w, rubberBandRect.h);
+        if (e.shiftKey) {
+          for (const id of ids) selectedIds.add(id);
+        } else {
+          selectedIds = new Set(ids);
+        }
+      }
+      rubberBandRect = null;
     }
     dragMode = null;
+    dragStartPositions = null;
     resizeAnchor = null;
     resizeStartBounds = null;
     resizeStartEntity = null;
+    redrawAll();
     return;
   }
 
@@ -708,17 +790,17 @@ canvas.addEventListener("dblclick", e => {
 
 // --- Delete / Clear ---
 document.getElementById("deleteBtn").addEventListener("click", () => {
-  if (selectedId) {
-    entities.delete(selectedId);
-    vscode.postMessage({ type: "entityDelete", payload: { id: selectedId } });
-    selectedId = null;
-    redrawAll();
+  for (const id of [...selectedIds]) {
+    entities.delete(id);
+    vscode.postMessage({ type: "entityDelete", payload: { id } });
   }
+  selectedIds.clear();
+  redrawAll();
 });
 
 document.getElementById("clearBtn").addEventListener("click", () => {
   entities.clear();
-  selectedId = null;
+  selectedIds.clear();
   vscode.postMessage({ type: "clear" });
   redrawAll();
 });
@@ -726,12 +808,11 @@ document.getElementById("clearBtn").addEventListener("click", () => {
 document.getElementById("saveBtn").addEventListener("click", savePng);
 
 function savePng() {
-  // Temporarily deselect so the selection box is not included in the export
-  const savedSelectedId = selectedId;
-  selectedId = null;
+  // Temporarily deselect so selection boxes are not included in the export
+  const savedIds = new Set(selectedIds);
+  selectedIds.clear();
   redrawAll();
 
-  // Create an offscreen canvas with a filled background
   const offCanvas = document.createElement("canvas");
   offCanvas.width = canvas.width;
   offCanvas.height = canvas.height;
@@ -742,8 +823,7 @@ function savePng() {
 
   const dataUrl = offCanvas.toDataURL("image/png");
 
-  // Restore selection
-  selectedId = savedSelectedId;
+  selectedIds = savedIds;
   redrawAll();
 
   vscode.postMessage({ type: "savePng", payload: { dataUrl } });
@@ -759,30 +839,37 @@ document.addEventListener("keydown", e => {
   }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") {
     e.preventDefault();
-    if (selectedId && entities.has(selectedId)) {
-      clipboard = JSON.parse(JSON.stringify(entities.get(selectedId)));
+    if (selectedIds.size > 0) {
+      clipboard = [...selectedIds]
+        .map(id => entities.get(id))
+        .filter(Boolean)
+        .map(ent => JSON.parse(JSON.stringify(ent)));
       pasteOffset = 0;
     }
     return;
   }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v") {
     e.preventDefault();
-    if (!clipboard) return;
+    if (!clipboard || clipboard.length === 0) return;
     pasteOffset += 16;
-    const pasted = JSON.parse(JSON.stringify(clipboard));
-    pasted.id = crypto.randomUUID();
-    if (pasted.type === "line" || pasted.type === "arrow") {
-      pasted.x1 += pasteOffset; pasted.y1 += pasteOffset;
-      pasted.x2 += pasteOffset; pasted.y2 += pasteOffset;
-      pasted.x  += pasteOffset; pasted.y  += pasteOffset;
-    } else {
-      pasted.x += pasteOffset;
-      pasted.y += pasteOffset;
+    const newIds = new Set();
+    for (const orig of clipboard) {
+      const pasted = JSON.parse(JSON.stringify(orig));
+      pasted.id = crypto.randomUUID();
+      if (pasted.type === "line" || pasted.type === "arrow") {
+        pasted.x1 += pasteOffset; pasted.y1 += pasteOffset;
+        pasted.x2 += pasteOffset; pasted.y2 += pasteOffset;
+        pasted.x  += pasteOffset; pasted.y  += pasteOffset;
+      } else {
+        pasted.x += pasteOffset;
+        pasted.y += pasteOffset;
+      }
+      entities.set(pasted.id, pasted);
+      newIds.add(pasted.id);
+      vscode.postMessage({ type: "entityAdd", payload: { entity: pasted } });
     }
-    entities.set(pasted.id, pasted);
-    selectedId = pasted.id;
+    selectedIds = newIds;
     setTool("select");
-    vscode.postMessage({ type: "entityAdd", payload: { entity: pasted } });
     redrawAll();
     return;
   }
@@ -794,10 +881,12 @@ document.addEventListener("keydown", e => {
     case "a": setTool("arrow"); break;
     case "t": setTool("text"); break;
   }
-  if ((e.key === "Delete" || e.key === "Backspace") && selectedId) {
-    entities.delete(selectedId);
-    vscode.postMessage({ type: "entityDelete", payload: { id: selectedId } });
-    selectedId = null;
+  if ((e.key === "Delete" || e.key === "Backspace") && selectedIds.size > 0) {
+    for (const id of [...selectedIds]) {
+      entities.delete(id);
+      vscode.postMessage({ type: "entityDelete", payload: { id } });
+    }
+    selectedIds.clear();
     redrawAll();
   }
 });
@@ -820,12 +909,12 @@ window.addEventListener("message", event => {
     }
     case "entityDelete":
       entities.delete(msg.payload.id);
-      if (selectedId === msg.payload.id) selectedId = null;
+      selectedIds.delete(msg.payload.id);
       redrawAll();
       break;
     case "clear":
       entities.clear();
-      selectedId = null;
+      selectedIds.clear();
       redrawAll();
       break;
     case "fullSync":
