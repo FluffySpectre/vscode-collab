@@ -6,9 +6,18 @@
 <style>
   html, body { margin: 0; padding: 0; overflow: hidden; width: 100%; height: 100%; background: var(--vscode-editor-background); }
   #board { position: fixed; top: 0; left: 0; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
-  #toolbar { position: fixed; top: 8px; right: 8px; z-index: 10; display: flex; gap: 4px; align-items: center; }
+  #toolbar {
+    position: fixed; top: 8px; left: 8px; right: 8px; z-index: 10;
+    display: flex; gap: 4px; align-items: center;
+    overflow-x: auto; flex-wrap: nowrap;
+    scrollbar-width: thin;
+    scrollbar-color: var(--vscode-scrollbarSlider-background, rgba(100,100,100,0.4)) transparent;
+  }
+  #toolbar::-webkit-scrollbar { height: 4px; }
+  #toolbar::-webkit-scrollbar-track { background: transparent; }
+  #toolbar::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background, rgba(100,100,100,0.4)); border-radius: 2px; }
   #toolbar button, #toolbar .tool-btn {
-    padding: 4px 8px; cursor: pointer;
+    padding: 4px 8px; cursor: pointer; flex-shrink: 0;
     background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground);
     border: none; border-radius: 3px; display: flex; align-items: center; justify-content: center;
     min-width: 28px; height: 28px;
@@ -20,9 +29,9 @@
   #zoomLevelBtn { font-size: 11px; min-width: 40px; font-family: monospace; }
   #toolbar .tool-btn.active { background: var(--vscode-button-background); color: var(--vscode-button-foreground); outline: 1px solid var(--vscode-focusBorder); }
   #toolbar .tool-btn svg { width: 16px; height: 16px; }
-  .separator { width: 1px; height: 20px; background: var(--vscode-panel-border); margin: 0 2px; }
-  #colorPicker { width: 28px; height: 28px; cursor: pointer; border: none; padding: 0; border-radius: 3px; }
-  #widthSlider { width: 50px; height: 20px; cursor: pointer; }
+  .separator { flex-shrink: 0; width: 1px; height: 20px; background: var(--vscode-panel-border); margin: 0 2px; }
+  #colorPicker { flex-shrink: 0; width: 28px; height: 28px; cursor: pointer; border: none; padding: 0; border-radius: 3px; }
+  #widthSlider { flex-shrink: 0; width: 50px; height: 20px; cursor: pointer; }
   #textInput {
     position: fixed; z-index: 20; display: none;
     background: var(--vscode-input-background); color: var(--vscode-input-foreground);
