@@ -5,7 +5,11 @@ import * as crypto from "crypto";
 import {
   Message,
   MessageType,
-  WhiteboardStrokePayload,
+  WhiteboardEntity,
+  WhiteboardEntityAddPayload,
+  WhiteboardEntityUpdatePayload,
+  WhiteboardEntityDeletePayload,
+  WhiteboardFullSyncPayload,
   createMessage,
 } from "../../network/protocol";
 
@@ -13,6 +17,7 @@ export class WhiteboardPanel {
   private panel: vscode.WebviewPanel;
   private sendFn: (msg: Message) => void;
   private _disposed = false;
+  private entities: Map<string, WhiteboardEntity> = new Map();
 
   constructor(
     context: vscode.ExtensionContext,
@@ -33,13 +38,38 @@ export class WhiteboardPanel {
       .replace(/\{\{nonce\}\}/g, nonce);
 
     this.panel.webview.onDidReceiveMessage((msg) => {
-      if (msg.type === "stroke") {
-        const payload: WhiteboardStrokePayload = msg.payload;
-        this.sendFn(createMessage(MessageType.WhiteboardStroke, payload));
-      }
-
-      if (msg.type === "clear") {
-        this.sendFn(createMessage(MessageType.WhiteboardClear, {}));
+      switch (msg.type) {
+        case "entityAdd": {
+          const entity = msg.payload.entity as WhiteboardEntity;
+          this.entities.set(entity.id, entity);
+          this.sendFn(createMessage(MessageType.WhiteboardEntityAdd, msg.payload));
+          break;
+        }
+        case "entityUpdate": {
+          const existing = this.entities.get(msg.payload.id);
+          if (existing) {
+            Object.assign(existing, msg.payload.changes);
+          }
+          this.sendFn(createMessage(MessageType.WhiteboardEntityUpdate, msg.payload));
+          break;
+        }
+        case "entityDelete": {
+          this.entities.delete(msg.payload.id);
+          this.sendFn(createMessage(MessageType.WhiteboardEntityDelete, msg.payload));
+          break;
+        }
+        case "clear": {
+          this.entities.clear();
+          this.sendFn(createMessage(MessageType.WhiteboardClear, {}));
+          break;
+        }
+        case "requestFullSync": {
+          this.panel.webview.postMessage({
+            type: "fullSync",
+            payload: { entities: Array.from(this.entities.values()) },
+          });
+          break;
+        }
       }
     });
 
@@ -56,15 +86,39 @@ export class WhiteboardPanel {
     this.panel.reveal(vscode.ViewColumn.Beside);
   }
 
-  handleRemoteStroke(payload: WhiteboardStrokePayload) {
-    this.panel.webview.postMessage({
-      type: "stroke",
-      payload,
-    });
+  handleRemoteEntityAdd(payload: WhiteboardEntityAddPayload) {
+    this.entities.set(payload.entity.id, payload.entity);
+    this.panel.webview.postMessage({ type: "entityAdd", payload });
+  }
+
+  handleRemoteEntityUpdate(payload: WhiteboardEntityUpdatePayload) {
+    const existing = this.entities.get(payload.id);
+    if (existing) {
+      Object.assign(existing, payload.changes);
+    }
+    this.panel.webview.postMessage({ type: "entityUpdate", payload });
+  }
+
+  handleRemoteEntityDelete(payload: WhiteboardEntityDeletePayload) {
+    this.entities.delete(payload.id);
+    this.panel.webview.postMessage({ type: "entityDelete", payload });
+  }
+
+  handleRemoteFullSync(payload: WhiteboardFullSyncPayload) {
+    this.entities.clear();
+    for (const e of payload.entities) {
+      this.entities.set(e.id, e);
+    }
+    this.panel.webview.postMessage({ type: "fullSync", payload });
   }
 
   handleRemoteClear() {
+    this.entities.clear();
     this.panel.webview.postMessage({ type: "clear" });
+  }
+
+  getEntities(): WhiteboardEntity[] {
+    return Array.from(this.entities.values());
   }
 }
 

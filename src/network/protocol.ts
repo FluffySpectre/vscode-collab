@@ -17,7 +17,10 @@ export enum MessageType {
   FileSaved = "fileSaved",
 
   // Whiteboard
-  WhiteboardStroke = "whiteboardStroke",
+  WhiteboardEntityAdd = "whiteboardEntityAdd",
+  WhiteboardEntityUpdate = "whiteboardEntityUpdate",
+  WhiteboardEntityDelete = "whiteboardEntityDelete",
+  WhiteboardFullSync = "whiteboardFullSync",
   WhiteboardClear = "whiteboardClear",
 
   // Chat
@@ -105,10 +108,69 @@ export interface FileSavedPayload {
   filePath: string;
 }
 
-export interface WhiteboardStrokePayload {
-  points: { x: number; y: number }[];
-  color: string;
+// Whiteboard entity types
+
+export type WhiteboardEntityType = "stroke" | "rect" | "line" | "text";
+
+export interface WhiteboardEntityBase {
+  id: string;
+  type: WhiteboardEntityType;
+  x: number;
+  y: number;
   width: number;
+  height: number;
+  color: string;
+  createdBy: string;
+}
+
+export interface WhiteboardStrokeEntity extends WhiteboardEntityBase {
+  type: "stroke";
+  points: { x: number; y: number }[];
+  strokeWidth: number;
+}
+
+export interface WhiteboardRectEntity extends WhiteboardEntityBase {
+  type: "rect";
+  strokeWidth: number;
+  filled: boolean;
+}
+
+export interface WhiteboardLineEntity extends WhiteboardEntityBase {
+  type: "line";
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  strokeWidth: number;
+}
+
+export interface WhiteboardTextEntity extends WhiteboardEntityBase {
+  type: "text";
+  text: string;
+  fontSize: number;
+}
+
+export type WhiteboardEntity =
+  | WhiteboardStrokeEntity
+  | WhiteboardRectEntity
+  | WhiteboardLineEntity
+  | WhiteboardTextEntity;
+
+export interface WhiteboardEntityAddPayload {
+  entity: WhiteboardEntity;
+}
+
+export interface WhiteboardEntityUpdatePayload {
+  id: string;
+  changes: Record<string, unknown>;
+}
+
+export interface WhiteboardEntityDeletePayload {
+  id: string;
+}
+
+export interface WhiteboardFullSyncPayload {
+  entities: WhiteboardEntity[];
 }
 
 export interface WhiteboardClearPayload {}

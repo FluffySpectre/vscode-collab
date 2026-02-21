@@ -6,117 +6,701 @@
 <style>
   html, body { margin: 0; padding: 0; overflow: hidden; width: 100%; height: 100%; background: var(--vscode-editor-background); }
   #board { position: fixed; top: 0; left: 0; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
-  #toolbar { position: fixed; top: 8px; right: 8px; z-index: 10; display: flex; gap: 6px; align-items: center; }
-  #toolbar button { padding: 4px 12px; cursor: pointer; background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; border-radius: 3px; }
-  #toolbar button:hover { background: var(--vscode-button-hoverBackground); }
-  #colorPicker { width: 32px; height: 28px; cursor: pointer; border: none; padding: 0; border-radius: 3px; }
+  #toolbar { position: fixed; top: 8px; right: 8px; z-index: 10; display: flex; gap: 4px; align-items: center; }
+  #toolbar button, #toolbar .tool-btn {
+    padding: 4px 8px; cursor: pointer;
+    background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground);
+    border: none; border-radius: 3px; display: flex; align-items: center; justify-content: center;
+    min-width: 28px; height: 28px;
+  }
+  #toolbar button:hover, #toolbar .tool-btn:hover { background: var(--vscode-button-hoverBackground); color: var(--vscode-button-foreground); }
+  #toolbar .tool-btn.active { background: var(--vscode-button-background); color: var(--vscode-button-foreground); outline: 1px solid var(--vscode-focusBorder); }
+  #toolbar .tool-btn svg { width: 16px; height: 16px; }
+  .separator { width: 1px; height: 20px; background: var(--vscode-panel-border); margin: 0 2px; }
+  #colorPicker { width: 28px; height: 28px; cursor: pointer; border: none; padding: 0; border-radius: 3px; }
+  #widthSlider { width: 50px; height: 20px; cursor: pointer; }
+  #textInput {
+    position: fixed; z-index: 20; display: none;
+    background: var(--vscode-input-background); color: var(--vscode-input-foreground);
+    border: 1px solid var(--vscode-focusBorder); border-radius: 3px;
+    padding: 2px 4px; font: 16px sans-serif; outline: none; min-width: 80px;
+  }
 </style>
 </head>
 <body>
 <div id="toolbar">
-  <input type="color" id="colorPicker" value="#ffffff" title="Stroke color" />
+  <button class="tool-btn active" data-tool="select" title="Select (V)">
+    <svg viewBox="0 0 16 16" fill="currentColor"><path d="M3 1l10 7-4.5 1L6 14z"/></svg>
+  </button>
+  <button class="tool-btn" data-tool="pen" title="Pen (P)">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 14c2-4 4-6 6-8s4-3 6-4"/></svg>
+  </button>
+  <button class="tool-btn" data-tool="rect" title="Rectangle (R)">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="12" height="10" rx="1"/></svg>
+  </button>
+  <button class="tool-btn" data-tool="line" title="Line (L)">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="2" y1="14" x2="14" y2="2"/></svg>
+  </button>
+  <button class="tool-btn" data-tool="text" title="Text (T)">
+    <svg viewBox="0 0 16 16" fill="currentColor"><text x="3" y="13" font-size="13" font-weight="bold" font-family="sans-serif">T</text></svg>
+  </button>
+
+  <span class="separator"></span>
+
+  <input type="color" id="colorPicker" value="#ffffff" title="Color" />
+  <input type="range" id="widthSlider" min="1" max="10" value="2" title="Stroke width" />
+
+  <span class="separator"></span>
+
+  <button id="deleteBtn" title="Delete selected (Del)"><svg xmlns="http://www.w3.org/2000/svg" height="20px" viewBox="0 -960 960 960" width="20px" fill="currentColor"><path d="M280-120q-33 0-56.5-23.5T200-200v-520h-40v-80h200v-40h240v40h200v80h-40v520q0 33-23.5 56.5T680-120H280Zm400-600H280v520h400v-520ZM360-280h80v-360h-80v360Zm160 0h80v-360h-80v360ZM280-720v520-520Z"/></svg></button>
   <button id="clearBtn">Clear</button>
 </div>
+<input type="text" id="textInput" />
 <canvas id="board"></canvas>
 <script nonce="{{nonce}}">
 const vscode = acquireVsCodeApi();
 const canvas = document.getElementById("board");
 const ctx = canvas.getContext("2d");
 const colorPicker = document.getElementById("colorPicker");
+const widthSlider = document.getElementById("widthSlider");
 
-function resize() {
-  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
-  ctx.putImageData(imgData, 0, 0);
-}
-window.addEventListener("resize", resize);
-resize();
-
-let drawing = false;
-let currentPoints = [];
+// --- State ---
+const entities = new Map();
+let currentTool = "select";
 let currentColor = "#ffffff";
-let allStrokes = [];
+let currentWidth = 2;
 
-colorPicker.addEventListener("input", e => {
-  currentColor = e.target.value;
-});
+// Drawing state
+let isDragging = false;
+let dragStart = { x: 0, y: 0 };
+let currentPoints = [];
+let previewEntity = null;
 
-function finishStroke() {
-  if (!drawing || currentPoints.length < 2) {
-    drawing = false;
-    currentPoints = [];
-    return;
-  }
-  drawing = false;
-  const stroke = { points: currentPoints, color: currentColor, width: 2 };
-  allStrokes.push(stroke);
-  vscode.postMessage({ type: "stroke", payload: stroke });
-  currentPoints = [];
+// Selection state
+let selectedId = null;
+let dragMode = null; // null | "move" | "resize-nw" | "resize-ne" | "resize-sw" | "resize-se"
+let dragOffset = { x: 0, y: 0 };
+let resizeAnchor = null;
+let resizeStartBounds = null;
+let resizeStartEntity = null;
+
+const HANDLE_SIZE = 8;
+const HIT_TOLERANCE = 6;
+const MIN_SIZE = 10;
+
+// --- Tool switching ---
+colorPicker.addEventListener("input", e => { currentColor = e.target.value; });
+widthSlider.addEventListener("input", e => { currentWidth = parseInt(e.target.value, 10); });
+
+function setTool(tool) {
+  currentTool = tool;
+  if (tool !== "select") { selectedId = null; redrawAll(); }
+  document.querySelectorAll(".tool-btn").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.tool === tool);
+  });
+  canvas.style.cursor = tool === "select" ? "default" : tool === "text" ? "text" : "crosshair";
 }
 
-canvas.addEventListener("pointerdown", e => {
-  canvas.setPointerCapture(e.pointerId);
-  drawing = true;
-  currentPoints = [{ x: e.offsetX, y: e.offsetY }];
+document.querySelectorAll(".tool-btn").forEach(btn => {
+  btn.addEventListener("click", () => setTool(btn.dataset.tool));
 });
 
-canvas.addEventListener("pointermove", e => {
-  if (!drawing) return;
-  const prev = currentPoints[currentPoints.length - 1];
-  const pt = { x: e.offsetX, y: e.offsetY };
-  currentPoints.push(pt);
-  ctx.strokeStyle = currentColor;
-  ctx.lineWidth = 2;
+// --- Entity bounding box ---
+function getEntityBounds(e) {
+  if (e.type === "line") {
+    const x = Math.min(e.x1, e.x2), y = Math.min(e.y1, e.y2);
+    return { x, y, w: Math.abs(e.x2 - e.x1) || 4, h: Math.abs(e.y2 - e.y1) || 4 };
+  }
+  return { x: e.x, y: e.y, w: e.width || 4, h: e.height || 4 };
+}
+
+function getCorners(b) {
+  return [
+    { x: b.x, y: b.y },             // nw
+    { x: b.x + b.w, y: b.y },       // ne
+    { x: b.x + b.w, y: b.y + b.h }, // se
+    { x: b.x, y: b.y + b.h },       // sw
+  ];
+}
+
+// --- Drawing functions ---
+function drawStrokeEntity(e) {
+  if (!e.points || e.points.length < 2) return;
+  ctx.strokeStyle = e.color;
+  ctx.lineWidth = e.strokeWidth;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   ctx.beginPath();
-  ctx.moveTo(prev.x, prev.y);
-  ctx.lineTo(pt.x, pt.y);
-  ctx.stroke();
-});
-
-canvas.addEventListener("pointerup", finishStroke);
-canvas.addEventListener("pointercancel", finishStroke);
-
-document.getElementById("clearBtn").addEventListener("click", () => {
-  allStrokes = [];
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  vscode.postMessage({ type: "clear" });
-});
-
-function drawStroke(points, color, width) {
-  if (points.length < 2) return;
-  ctx.strokeStyle = color;
-  ctx.lineWidth = width;
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  ctx.beginPath();
-  ctx.moveTo(points[0].x, points[0].y);
-  for (let i = 1; i < points.length; i++) {
-    ctx.lineTo(points[i].x, points[i].y);
+  ctx.moveTo(e.x + e.points[0].x, e.y + e.points[0].y);
+  for (let i = 1; i < e.points.length; i++) {
+    ctx.lineTo(e.x + e.points[i].x, e.y + e.points[i].y);
   }
   ctx.stroke();
+}
+
+function drawRectEntity(e) {
+  ctx.strokeStyle = e.color;
+  ctx.lineWidth = e.strokeWidth;
+  ctx.lineJoin = "miter";
+  if (e.filled) {
+    ctx.fillStyle = e.color;
+    ctx.globalAlpha = 0.2;
+    ctx.fillRect(e.x, e.y, e.width, e.height);
+    ctx.globalAlpha = 1;
+  }
+  ctx.strokeRect(e.x, e.y, e.width, e.height);
+}
+
+function drawLineEntity(e) {
+  ctx.strokeStyle = e.color;
+  ctx.lineWidth = e.strokeWidth;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(e.x1, e.y1);
+  ctx.lineTo(e.x2, e.y2);
+  ctx.stroke();
+}
+
+function drawTextEntity(e) {
+  ctx.fillStyle = e.color;
+  ctx.font = e.fontSize + "px sans-serif";
+  ctx.textBaseline = "top";
+  ctx.fillText(e.text, e.x, e.y);
+}
+
+function drawEntity(e) {
+  switch (e.type) {
+    case "stroke": drawStrokeEntity(e); break;
+    case "rect":   drawRectEntity(e); break;
+    case "line":   drawLineEntity(e); break;
+    case "text":   drawTextEntity(e); break;
+  }
+}
+
+function drawSelectionBox(e) {
+  const b = getEntityBounds(e);
+  ctx.save();
+  ctx.setLineDash([4, 4]);
+  ctx.strokeStyle = "#4fc3f7";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(b.x - 4, b.y - 4, b.w + 8, b.h + 8);
+  ctx.setLineDash([]);
+
+  const corners = getCorners({ x: b.x - 4, y: b.y - 4, w: b.w + 8, h: b.h + 8 });
+  for (const c of corners) {
+    ctx.fillStyle = "#ffffff";
+    ctx.strokeStyle = "#4fc3f7";
+    ctx.lineWidth = 1;
+    ctx.fillRect(c.x - HANDLE_SIZE / 2, c.y - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
+    ctx.strokeRect(c.x - HANDLE_SIZE / 2, c.y - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
+  }
+  ctx.restore();
 }
 
 function redrawAll() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  for (const s of allStrokes) {
-    drawStroke(s.points, s.color, s.width);
+  for (const e of entities.values()) {
+    drawEntity(e);
+  }
+  if (previewEntity) {
+    drawEntity(previewEntity);
+  }
+  if (selectedId && entities.has(selectedId)) {
+    drawSelectionBox(entities.get(selectedId));
   }
 }
 
-window.addEventListener("message", event => {
-  const msg = event.data;
-  if (msg.type === "stroke") {
-    allStrokes.push(msg.payload);
-    drawStroke(msg.payload.points, msg.payload.color, msg.payload.width);
+// --- Resize ---
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  redrawAll();
+}
+window.addEventListener("resize", resize);
+resize();
+
+// --- Hit testing ---
+function distToSegment(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return Math.hypot(px - ax, py - ay);
+  let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+function isPointInEntity(px, py, e) {
+  switch (e.type) {
+    case "stroke": {
+      if (!e.points || e.points.length < 2) return false;
+      for (let i = 1; i < e.points.length; i++) {
+        const d = distToSegment(px, py,
+          e.x + e.points[i - 1].x, e.y + e.points[i - 1].y,
+          e.x + e.points[i].x, e.y + e.points[i].y);
+        if (d < HIT_TOLERANCE) return true;
+      }
+      return false;
+    }
+    case "rect":
+      return px >= e.x && px <= e.x + e.width && py >= e.y && py <= e.y + e.height;
+    case "line":
+      return distToSegment(px, py, e.x1, e.y1, e.x2, e.y2) < HIT_TOLERANCE;
+    case "text": {
+      const b = getEntityBounds(e);
+      return px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h;
+    }
   }
-  if (msg.type === "clear") {
-    allStrokes = [];
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  return false;
+}
+
+function hitTest(px, py) {
+  const arr = Array.from(entities.values()).reverse();
+  for (const e of arr) {
+    if (isPointInEntity(px, py, e)) return e.id;
+  }
+  return null;
+}
+
+function hitTestHandle(px, py, e) {
+  const b = getEntityBounds(e);
+  const expanded = { x: b.x - 4, y: b.y - 4, w: b.w + 8, h: b.h + 8 };
+  const corners = getCorners(expanded);
+  const labels = ["resize-nw", "resize-ne", "resize-se", "resize-sw"];
+  for (let i = 0; i < corners.length; i++) {
+    if (Math.abs(px - corners[i].x) < HANDLE_SIZE && Math.abs(py - corners[i].y) < HANDLE_SIZE) {
+      return labels[i];
+    }
+  }
+  return null;
+}
+
+// --- Measure text for bounding box ---
+function measureText(text, fontSize) {
+  ctx.font = fontSize + "px sans-serif";
+  const m = ctx.measureText(text);
+  return { w: m.width, h: fontSize * 1.2 };
+}
+
+// --- Inline text input (prompt() is blocked in sandboxed webviews) ---
+const textInputEl = document.getElementById("textInput");
+let textInputCallback = null;
+
+let textInputReady = false;
+
+function showTextInput(x, y, defaultValue, fontSize, color, callback) {
+  textInputEl.style.left = x + "px";
+  textInputEl.style.top = y + "px";
+  textInputEl.style.font = fontSize + "px sans-serif";
+  textInputEl.style.color = color;
+  textInputEl.style.display = "block";
+  textInputEl.value = defaultValue;
+  textInputCallback = callback;
+  textInputReady = false;
+  // Delay focus so the pointerdown event fully completes first,
+  // preventing an immediate blur from hiding the input.
+  setTimeout(() => {
+    textInputEl.focus();
+    textInputEl.select();
+    textInputReady = true;
+  }, 10);
+}
+
+function commitTextInput() {
+  if (!textInputCallback) return;
+  const val = textInputEl.value.trim();
+  textInputEl.style.display = "none";
+  const cb = textInputCallback;
+  textInputCallback = null;
+  cb(val || null);
+}
+
+function cancelTextInput() {
+  textInputEl.style.display = "none";
+  textInputCallback = null;
+}
+
+textInputEl.addEventListener("keydown", e => {
+  if (e.key === "Enter") { e.preventDefault(); commitTextInput(); }
+  if (e.key === "Escape") { e.preventDefault(); cancelTextInput(); }
+  e.stopPropagation(); // prevent tool shortcuts while typing
+});
+
+textInputEl.addEventListener("blur", () => { if (textInputReady) commitTextInput(); });
+
+// --- Pointer events ---
+canvas.addEventListener("pointerdown", e => {
+  const px = e.offsetX, py = e.offsetY;
+  if (currentTool !== "text") {
+    canvas.setPointerCapture(e.pointerId);
+  }
+
+  if (currentTool === "select") {
+    // Check resize handle first
+    if (selectedId && entities.has(selectedId)) {
+      const handle = hitTestHandle(px, py, entities.get(selectedId));
+      if (handle) {
+        isDragging = true;
+        dragMode = handle;
+        const ent = entities.get(selectedId);
+        resizeStartBounds = getEntityBounds(ent);
+        resizeStartEntity = JSON.parse(JSON.stringify(ent));
+        // Anchor is the opposite corner
+        const cornerIdx = ["resize-nw", "resize-ne", "resize-se", "resize-sw"].indexOf(handle);
+        const oppositeIdx = (cornerIdx + 2) % 4;
+        const corners = getCorners(resizeStartBounds);
+        resizeAnchor = corners[oppositeIdx];
+        return;
+      }
+    }
+    // Hit test entities
+    const hitId = hitTest(px, py);
+    if (hitId) {
+      selectedId = hitId;
+      isDragging = true;
+      dragMode = "move";
+      const ent = entities.get(hitId);
+      const b = getEntityBounds(ent);
+      dragOffset = { x: px - b.x, y: py - b.y };
+      redrawAll();
+    } else {
+      selectedId = null;
+      isDragging = false;
+      dragMode = null;
+      redrawAll();
+    }
+    return;
+  }
+
+  isDragging = true;
+  dragStart = { x: px, y: py };
+
+  if (currentTool === "pen") {
+    currentPoints = [{ x: px, y: py }];
+  } else if (currentTool === "text") {
+    isDragging = false;
+    showTextInput(px, py, "", 16, currentColor, text => {
+      if (!text) return;
+      const m = measureText(text, 16);
+      const entity = {
+        id: crypto.randomUUID(),
+        type: "text",
+        x: px, y: py,
+        width: m.w, height: m.h,
+        color: currentColor,
+        createdBy: "",
+        text: text,
+        fontSize: 16,
+      };
+      entities.set(entity.id, entity);
+      vscode.postMessage({ type: "entityAdd", payload: { entity } });
+      redrawAll();
+    });
   }
 });
+
+canvas.addEventListener("pointermove", e => {
+  if (!isDragging) return;
+  const px = e.offsetX, py = e.offsetY;
+
+  if (currentTool === "select") {
+    if (dragMode === "move" && selectedId && entities.has(selectedId)) {
+      const ent = entities.get(selectedId);
+      const newX = px - dragOffset.x;
+      const newY = py - dragOffset.y;
+      if (ent.type === "line") {
+        const dx = newX - Math.min(ent.x1, ent.x2);
+        const dy = newY - Math.min(ent.y1, ent.y2);
+        ent.x1 += dx; ent.y1 += dy;
+        ent.x2 += dx; ent.y2 += dy;
+        ent.x = Math.min(ent.x1, ent.x2);
+        ent.y = Math.min(ent.y1, ent.y2);
+      } else {
+        ent.x = newX;
+        ent.y = newY;
+      }
+      redrawAll();
+    } else if (dragMode && dragMode.startsWith("resize-") && selectedId && entities.has(selectedId)) {
+      const ent = entities.get(selectedId);
+      const anchor = resizeAnchor;
+      const newX = Math.min(anchor.x, px);
+      const newY = Math.min(anchor.y, py);
+      const newW = Math.max(MIN_SIZE, Math.abs(px - anchor.x));
+      const newH = Math.max(MIN_SIZE, Math.abs(py - anchor.y));
+
+      if (ent.type === "stroke") {
+        const oldB = resizeStartBounds;
+        const scaleX = oldB.w > 0 ? newW / oldB.w : 1;
+        const scaleY = oldB.h > 0 ? newH / oldB.h : 1;
+        const orig = resizeStartEntity;
+        ent.x = newX;
+        ent.y = newY;
+        ent.width = newW;
+        ent.height = newH;
+        ent.points = orig.points.map(p => ({
+          x: p.x * scaleX,
+          y: p.y * scaleY,
+        }));
+      } else if (ent.type === "line") {
+        const oldB = resizeStartBounds;
+        const scaleX = oldB.w > 0 ? newW / oldB.w : 1;
+        const scaleY = oldB.h > 0 ? newH / oldB.h : 1;
+        const orig = resizeStartEntity;
+        const origMinX = Math.min(orig.x1, orig.x2);
+        const origMinY = Math.min(orig.y1, orig.y2);
+        ent.x1 = newX + (orig.x1 - origMinX) * scaleX;
+        ent.y1 = newY + (orig.y1 - origMinY) * scaleY;
+        ent.x2 = newX + (orig.x2 - origMinX) * scaleX;
+        ent.y2 = newY + (orig.y2 - origMinY) * scaleY;
+        ent.x = newX; ent.y = newY;
+        ent.width = newW; ent.height = newH;
+      } else if (ent.type === "text") {
+        const oldB = resizeStartBounds;
+        const scaleY = oldB.h > 0 ? newH / oldB.h : 1;
+        const orig = resizeStartEntity;
+        ent.fontSize = Math.max(8, orig.fontSize * scaleY);
+        ent.x = newX; ent.y = newY;
+        const m = measureText(ent.text, ent.fontSize);
+        ent.width = m.w; ent.height = m.h;
+      } else {
+        ent.x = newX; ent.y = newY;
+        ent.width = newW; ent.height = newH;
+      }
+      redrawAll();
+    }
+    return;
+  }
+
+  if (currentTool === "pen") {
+    const prev = currentPoints[currentPoints.length - 1];
+    const pt = { x: px, y: py };
+    currentPoints.push(pt);
+    ctx.strokeStyle = currentColor;
+    ctx.lineWidth = currentWidth;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    ctx.moveTo(prev.x, prev.y);
+    ctx.lineTo(pt.x, pt.y);
+    ctx.stroke();
+    return;
+  }
+
+  if (currentTool === "rect") {
+    const x = Math.min(dragStart.x, px), y = Math.min(dragStart.y, py);
+    const w = Math.abs(px - dragStart.x), h = Math.abs(py - dragStart.y);
+    previewEntity = {
+      type: "rect", x, y, width: w, height: h,
+      color: currentColor, strokeWidth: currentWidth, filled: false,
+    };
+    redrawAll();
+    return;
+  }
+
+  if (currentTool === "line") {
+    previewEntity = {
+      type: "line",
+      x1: dragStart.x, y1: dragStart.y, x2: px, y2: py,
+      x: Math.min(dragStart.x, px), y: Math.min(dragStart.y, py),
+      width: Math.abs(px - dragStart.x), height: Math.abs(py - dragStart.y),
+      color: currentColor, strokeWidth: currentWidth,
+    };
+    redrawAll();
+    return;
+  }
+});
+
+function finishDrag(e) {
+  if (!isDragging) return;
+  isDragging = false;
+  const px = e.offsetX, py = e.offsetY;
+
+  if (currentTool === "select") {
+    if ((dragMode === "move" || (dragMode && dragMode.startsWith("resize-"))) && selectedId && entities.has(selectedId)) {
+      const ent = entities.get(selectedId);
+      const changes = {};
+      if (ent.type === "line") {
+        Object.assign(changes, { x: ent.x, y: ent.y, width: ent.width, height: ent.height, x1: ent.x1, y1: ent.y1, x2: ent.x2, y2: ent.y2 });
+      } else if (ent.type === "stroke") {
+        Object.assign(changes, { x: ent.x, y: ent.y, width: ent.width, height: ent.height, points: ent.points });
+      } else if (ent.type === "text") {
+        Object.assign(changes, { x: ent.x, y: ent.y, width: ent.width, height: ent.height, fontSize: ent.fontSize });
+      } else {
+        Object.assign(changes, { x: ent.x, y: ent.y, width: ent.width, height: ent.height });
+      }
+      vscode.postMessage({ type: "entityUpdate", payload: { id: selectedId, changes } });
+    }
+    dragMode = null;
+    resizeAnchor = null;
+    resizeStartBounds = null;
+    resizeStartEntity = null;
+    return;
+  }
+
+  if (currentTool === "pen") {
+    previewEntity = null;
+    if (currentPoints.length < 2) { currentPoints = []; return; }
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const p of currentPoints) {
+      if (p.x < minX) minX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y > maxY) maxY = p.y;
+    }
+    const relPoints = currentPoints.map(p => ({ x: p.x - minX, y: p.y - minY }));
+    const entity = {
+      id: crypto.randomUUID(),
+      type: "stroke",
+      x: minX, y: minY,
+      width: maxX - minX, height: maxY - minY,
+      color: currentColor,
+      createdBy: "",
+      points: relPoints,
+      strokeWidth: currentWidth,
+    };
+    entities.set(entity.id, entity);
+    vscode.postMessage({ type: "entityAdd", payload: { entity } });
+    currentPoints = [];
+    redrawAll();
+    return;
+  }
+
+  if (currentTool === "rect") {
+    previewEntity = null;
+    const x = Math.min(dragStart.x, px), y = Math.min(dragStart.y, py);
+    const w = Math.abs(px - dragStart.x), h = Math.abs(py - dragStart.y);
+    if (w < 3 && h < 3) { redrawAll(); return; }
+    const entity = {
+      id: crypto.randomUUID(),
+      type: "rect",
+      x, y, width: w, height: h,
+      color: currentColor,
+      createdBy: "",
+      strokeWidth: currentWidth,
+      filled: false,
+    };
+    entities.set(entity.id, entity);
+    vscode.postMessage({ type: "entityAdd", payload: { entity } });
+    redrawAll();
+    return;
+  }
+
+  if (currentTool === "line") {
+    previewEntity = null;
+    const dx = px - dragStart.x, dy = py - dragStart.y;
+    if (Math.hypot(dx, dy) < 3) { redrawAll(); return; }
+    const entity = {
+      id: crypto.randomUUID(),
+      type: "line",
+      x: Math.min(dragStart.x, px), y: Math.min(dragStart.y, py),
+      width: Math.abs(dx), height: Math.abs(dy),
+      x1: dragStart.x, y1: dragStart.y, x2: px, y2: py,
+      color: currentColor,
+      createdBy: "",
+      strokeWidth: currentWidth,
+    };
+    entities.set(entity.id, entity);
+    vscode.postMessage({ type: "entityAdd", payload: { entity } });
+    redrawAll();
+    return;
+  }
+}
+
+canvas.addEventListener("pointerup", finishDrag);
+canvas.addEventListener("pointercancel", finishDrag);
+
+// --- Double-click to edit text ---
+canvas.addEventListener("dblclick", e => {
+  const px = e.offsetX, py = e.offsetY;
+  const hitId = hitTest(px, py);
+  if (hitId) {
+    const ent = entities.get(hitId);
+    if (ent && ent.type === "text") {
+      showTextInput(ent.x, ent.y, ent.text, ent.fontSize, ent.color, newText => {
+        if (!newText) return;
+        ent.text = newText;
+        const m = measureText(newText, ent.fontSize);
+        ent.width = m.w;
+        ent.height = m.h;
+        vscode.postMessage({ type: "entityUpdate", payload: { id: hitId, changes: { text: newText, width: m.w, height: m.h } } });
+        redrawAll();
+      });
+    }
+  }
+});
+
+// --- Delete / Clear ---
+document.getElementById("deleteBtn").addEventListener("click", () => {
+  if (selectedId) {
+    entities.delete(selectedId);
+    vscode.postMessage({ type: "entityDelete", payload: { id: selectedId } });
+    selectedId = null;
+    redrawAll();
+  }
+});
+
+document.getElementById("clearBtn").addEventListener("click", () => {
+  entities.clear();
+  selectedId = null;
+  vscode.postMessage({ type: "clear" });
+  redrawAll();
+});
+
+// --- Keyboard shortcuts ---
+document.addEventListener("keydown", e => {
+  if (e.target !== document.body && e.target !== canvas) return;
+  switch (e.key.toLowerCase()) {
+    case "v": setTool("select"); break;
+    case "p": setTool("pen"); break;
+    case "r": setTool("rect"); break;
+    case "l": setTool("line"); break;
+    case "t": setTool("text"); break;
+  }
+  if ((e.key === "Delete" || e.key === "Backspace") && selectedId) {
+    entities.delete(selectedId);
+    vscode.postMessage({ type: "entityDelete", payload: { id: selectedId } });
+    selectedId = null;
+    redrawAll();
+  }
+});
+
+// --- Messages from extension ---
+window.addEventListener("message", event => {
+  const msg = event.data;
+  switch (msg.type) {
+    case "entityAdd":
+      entities.set(msg.payload.entity.id, msg.payload.entity);
+      redrawAll();
+      break;
+    case "entityUpdate": {
+      const e = entities.get(msg.payload.id);
+      if (e) {
+        Object.assign(e, msg.payload.changes);
+        redrawAll();
+      }
+      break;
+    }
+    case "entityDelete":
+      entities.delete(msg.payload.id);
+      if (selectedId === msg.payload.id) selectedId = null;
+      redrawAll();
+      break;
+    case "clear":
+      entities.clear();
+      selectedId = null;
+      redrawAll();
+      break;
+    case "fullSync":
+      entities.clear();
+      for (const e of msg.payload.entities) {
+        entities.set(e.id, e);
+      }
+      redrawAll();
+      break;
+  }
+});
+
+// Request full sync on load (handles webview re-creation)
+vscode.postMessage({ type: "requestFullSync" });
 </script>
 </body>
 </html>
