@@ -27,7 +27,7 @@ import { FileOpsSync } from "../sync/fileOpsSync";
 import { StatusBar } from "../ui/statusBar";
 import { WhiteboardPanel } from "../ui/whiteboardPanel";
 import { RemoteTerminalOutput } from "../ui/remoteTerminalOutput";
-import { getSystemUsername } from "../utils/pathUtils";
+import { getSystemUsername, toAbsoluteUri } from "../utils/pathUtils";
 import { showChatMessage, promptAndSendMessage } from "../utils/chatUtils";
 import { PairProgFileSystemProvider } from "../vfs/pairProgFileSystemProvider";
 import { type as otText } from "ot-text";
@@ -176,6 +176,24 @@ export class ClientSession implements vscode.Disposable {
     this.setupSync();
 
     this.cursorSync!.sendCurrentCursor();
+
+    // Open the files that the host currently has open
+    await this.openHostFiles();
+  }
+
+  private async openHostFiles(): Promise<void> {
+    if (this._openFiles.length === 0) { return; }
+
+    for (const filePath of this._openFiles) {
+      try {
+        const uri = toAbsoluteUri(filePath);
+        const doc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(doc, { preview: false, preserveFocus: true });
+      } catch {
+        // File might not exist in the tree, skip silently
+      }
+    }
+    this._openFiles = [];
   }
 
   // Message Router
