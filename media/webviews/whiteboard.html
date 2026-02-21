@@ -133,6 +133,8 @@ let isPanning = false;
 let panStart = { x: 0, y: 0 };
 let panStartOffset = { x: 0, y: 0 };
 let spaceDown = false;
+// Device pixel ratio — kept in sync with the display in resize()
+let dpr = window.devicePixelRatio || 1;
 
 const HANDLE_SIZE = 8;
 const HIT_TOLERANCE = 6;
@@ -321,10 +323,13 @@ function drawSelectionBox(e, showHandles) {
 }
 
 function redrawAll() {
+  // Reset to true identity first so clearRect covers the full physical canvas.
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  // Apply pan/zoom transform — everything below is in world space
+  // Bake DPR into the view transform so world-space coordinates map directly
+  // to physical pixels — entities are re-rendered as sharp vectors every frame.
   ctx.save();
-  ctx.setTransform(viewScale, 0, 0, viewScale, viewOffset.x, viewOffset.y);
+  ctx.setTransform(viewScale * dpr, 0, 0, viewScale * dpr, viewOffset.x * dpr, viewOffset.y * dpr);
 
   for (const e of entities.values()) {
     drawEntity(e);
@@ -358,8 +363,11 @@ function redrawAll() {
 
 // --- Canvas resize ---
 function resize() {
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
+  // Size the canvas backing store at physical pixels so it stays crisp on
+  // HiDPI / Retina screens.  CSS keeps the element at 100% of the viewport.
+  dpr = window.devicePixelRatio || 1;
+  canvas.width  = Math.round(window.innerWidth  * dpr);
+  canvas.height = Math.round(window.innerHeight * dpr);
   redrawAll();
 }
 window.addEventListener("resize", resize);
@@ -782,17 +790,17 @@ canvas.addEventListener("pointermove", e => {
     const prev = currentPoints[currentPoints.length - 1];
     const pt = { x: px, y: py };
     currentPoints.push(pt);
-    // Draw in screen space (canvas has identity transform outside redrawAll),
-    // scaling the line width so it appears as currentWidth world-units on screen.
+    // Draw directly in device-pixel space (ctx is at identity outside redrawAll).
+    // worldToScreen gives CSS pixels; multiply by dpr to get device pixels.
     const prevS = worldToScreen(prev.x, prev.y);
     const ptS   = worldToScreen(pt.x, pt.y);
     ctx.strokeStyle = currentColor;
-    ctx.lineWidth = currentWidth * viewScale;
+    ctx.lineWidth = currentWidth * viewScale * dpr;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     ctx.beginPath();
-    ctx.moveTo(prevS.x, prevS.y);
-    ctx.lineTo(ptS.x, ptS.y);
+    ctx.moveTo(prevS.x * dpr, prevS.y * dpr);
+    ctx.lineTo(ptS.x  * dpr, ptS.y  * dpr);
     ctx.stroke();
     return;
   }
@@ -1044,10 +1052,10 @@ canvas.addEventListener("wheel", e => {
 
 // --- Zoom buttons ---
 document.getElementById("zoomInBtn").addEventListener("click", () => {
-  applyZoom(1.25, canvas.width / 2, canvas.height / 2);
+  applyZoom(1.25, window.innerWidth / 2, window.innerHeight / 2);
 });
 document.getElementById("zoomOutBtn").addEventListener("click", () => {
-  applyZoom(1 / 1.25, canvas.width / 2, canvas.height / 2);
+  applyZoom(1 / 1.25, window.innerWidth / 2, window.innerHeight / 2);
 });
 zoomLevelBtn.addEventListener("click", resetView);
 
