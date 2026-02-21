@@ -103,13 +103,11 @@
   },
   "dependencies": {
     "@teamwork/websocket-json-stream": "^2.0.0",
-    "minimatch": "^10.2.2",
     "ot-text": "^1.0.2",
     "sharedb": "^5.2.2",
     "ws": "^8.19.0"
   },
   "devDependencies": {
-    "@types/minimatch": "^5.1.2",
     "@types/node": "^24.1.0",
     "@types/sharedb": "^5.1.0",
     "@types/vscode": "^1.109.0",
