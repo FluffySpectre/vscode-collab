@@ -14,6 +14,7 @@
     min-width: 28px; height: 28px;
   }
   #toolbar button:hover, #toolbar .tool-btn:hover { background: var(--vscode-button-hoverBackground); color: var(--vscode-button-foreground); }
+  #toolbar button:disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
   #toolbar .tool-btn.active { background: var(--vscode-button-background); color: var(--vscode-button-foreground); outline: 1px solid var(--vscode-focusBorder); }
   #toolbar .tool-btn svg { width: 16px; height: 16px; }
   .separator { width: 1px; height: 20px; background: var(--vscode-panel-border); margin: 0 2px; }
@@ -52,6 +53,15 @@
 
   <input type="color" id="colorPicker" value="#ffffff" title="Color" />
   <input type="range" id="widthSlider" min="1" max="10" value="2" title="Stroke width" />
+
+  <span class="separator"></span>
+
+  <button id="undoBtn" disabled title="Undo (Ctrl+Z)">
+    <svg xmlns="http://www.w3.org/2000/svg" height="20px" viewBox="0 -960 960 960" width="20px" fill="currentColor"><path d="M280-200v-80h284q63 0 109.5-40T720-420q0-60-46.5-100T564-560H312l104 104-56 56-200-200 200-200 56 56-104 104h252q97 0 166.5 63T800-420q0 94-69.5 157T564-200H280Z"/></svg>
+  </button>
+  <button id="redoBtn" disabled title="Redo (Ctrl+Y)">
+    <svg xmlns="http://www.w3.org/2000/svg" height="20px" viewBox="0 -960 960 960" width="20px" fill="currentColor"><path d="M396-200q-97 0-166.5-63T160-420q0-94 69.5-157T396-640h252L544-744l56-56 200 200-200 200-56-56 104-104H396q-63 0-109.5 40T240-420q0 60 46.5 100T396-280h284v80H396Z"/></svg>
+  </button>
 
   <span class="separator"></span>
 
@@ -100,6 +110,11 @@ let rubberBandRect = null; // { x, y, w, h } while rubber-banding
 // Copy/paste state
 let clipboard = null; // array of entity snapshots
 let pasteOffset = 0;
+
+// Undo/redo state
+const undoStack = [];
+const redoStack = [];
+const MAX_HISTORY = 100;
 
 const HANDLE_SIZE = 8;
 const HIT_TOLERANCE = 6;
@@ -352,6 +367,99 @@ function entitiesInRect(rx, ry, rw, rh) {
   return result;
 }
 
+// --- Undo / Redo ---
+function updateUndoRedoBtns() {
+  document.getElementById("undoBtn").disabled = undoStack.length === 0;
+  document.getElementById("redoBtn").disabled = redoStack.length === 0;
+}
+
+function pushUndo(cmd) {
+  undoStack.push(cmd);
+  if (undoStack.length > MAX_HISTORY) undoStack.shift();
+  redoStack.length = 0;
+  updateUndoRedoBtns();
+}
+
+// cmd.type: "add" | "delete" | "update" | "clear"
+//   add:    { entities: [...snapshots] }  – undo=delete, redo=add
+//   delete: { entities: [...snapshots] }  – undo=add,    redo=delete
+//   update: { changes: [{id, before, after}] }
+//   clear:  { entities: [...snapshots] }  – undo=restore, redo=clear
+function executeCommand(cmd, reverse) {
+  switch (cmd.type) {
+    case "add": {
+      if (reverse) {
+        for (const ent of cmd.entities) {
+          entities.delete(ent.id);
+          selectedIds.delete(ent.id);
+          vscode.postMessage({ type: "entityDelete", payload: { id: ent.id } });
+        }
+      } else {
+        for (const ent of cmd.entities) {
+          entities.set(ent.id, JSON.parse(JSON.stringify(ent)));
+          vscode.postMessage({ type: "entityAdd", payload: { entity: ent } });
+        }
+      }
+      break;
+    }
+    case "delete": {
+      if (reverse) {
+        for (const ent of cmd.entities) {
+          entities.set(ent.id, JSON.parse(JSON.stringify(ent)));
+          vscode.postMessage({ type: "entityAdd", payload: { entity: ent } });
+        }
+      } else {
+        for (const ent of cmd.entities) {
+          entities.delete(ent.id);
+          selectedIds.delete(ent.id);
+          vscode.postMessage({ type: "entityDelete", payload: { id: ent.id } });
+        }
+      }
+      break;
+    }
+    case "update": {
+      for (const { id, before, after } of cmd.changes) {
+        const ent = entities.get(id);
+        if (!ent) continue;
+        const patch = reverse ? before : after;
+        Object.assign(ent, patch);
+        vscode.postMessage({ type: "entityUpdate", payload: { id, changes: patch } });
+      }
+      break;
+    }
+    case "clear": {
+      if (reverse) {
+        for (const ent of cmd.entities) {
+          entities.set(ent.id, JSON.parse(JSON.stringify(ent)));
+          vscode.postMessage({ type: "entityAdd", payload: { entity: ent } });
+        }
+      } else {
+        entities.clear();
+        selectedIds.clear();
+        vscode.postMessage({ type: "clear" });
+      }
+      break;
+    }
+  }
+  redrawAll();
+}
+
+function applyUndo() {
+  if (undoStack.length === 0) return;
+  const cmd = undoStack.pop();
+  executeCommand(cmd, true);
+  redoStack.push(cmd);
+  updateUndoRedoBtns();
+}
+
+function applyRedo() {
+  if (redoStack.length === 0) return;
+  const cmd = redoStack.pop();
+  executeCommand(cmd, false);
+  undoStack.push(cmd);
+  updateUndoRedoBtns();
+}
+
 // --- Measure text for bounding box ---
 function measureText(text, fontSize) {
   ctx.font = fontSize + "px sans-serif";
@@ -492,6 +600,7 @@ canvas.addEventListener("pointerdown", e => {
         fontSize: 16,
       };
       entities.set(entity.id, entity);
+      pushUndo({ type: "add", entities: [JSON.parse(JSON.stringify(entity))] });
       vscode.postMessage({ type: "entityAdd", payload: { entity } });
       redrawAll();
     });
@@ -646,15 +755,30 @@ function finishDrag(e) {
 
   if (currentTool === "select") {
     if (dragMode === "move") {
-      for (const id of selectedIds) {
+      // Build undo from start-snapshots vs. current state
+      const undoChanges = [];
+      for (const [id, orig] of dragStartPositions) {
         const ent = entities.get(id);
-        if (ent) vscode.postMessage({ type: "entityUpdate", payload: { id, changes: buildChanges(ent) } });
+        if (!ent) continue;
+        const before = buildChanges(orig);
+        const after = buildChanges(ent);
+        undoChanges.push({ id, before, after });
+      }
+      const actuallyMoved = undoChanges.some(c => JSON.stringify(c.before) !== JSON.stringify(c.after));
+      if (actuallyMoved) pushUndo({ type: "update", changes: undoChanges });
+      for (const { id, after } of undoChanges) {
+        vscode.postMessage({ type: "entityUpdate", payload: { id, changes: after } });
       }
     } else if (dragMode && dragMode.startsWith("resize-")) {
       const singleId = [...selectedIds][0];
       if (singleId && entities.has(singleId)) {
         const ent = entities.get(singleId);
-        vscode.postMessage({ type: "entityUpdate", payload: { id: singleId, changes: buildChanges(ent) } });
+        const before = buildChanges(resizeStartEntity);
+        const after = buildChanges(ent);
+        if (JSON.stringify(before) !== JSON.stringify(after)) {
+          pushUndo({ type: "update", changes: [{ id: singleId, before, after }] });
+        }
+        vscode.postMessage({ type: "entityUpdate", payload: { id: singleId, changes: after } });
       }
     } else if (dragMode === "rubber-band") {
       if (rubberBandRect && rubberBandRect.w > 2 && rubberBandRect.h > 2) {
@@ -698,6 +822,7 @@ function finishDrag(e) {
       strokeWidth: currentWidth,
     };
     entities.set(entity.id, entity);
+    pushUndo({ type: "add", entities: [JSON.parse(JSON.stringify(entity))] });
     vscode.postMessage({ type: "entityAdd", payload: { entity } });
     currentPoints = [];
     redrawAll();
@@ -719,6 +844,7 @@ function finishDrag(e) {
       filled: false,
     };
     entities.set(entity.id, entity);
+    pushUndo({ type: "add", entities: [JSON.parse(JSON.stringify(entity))] });
     vscode.postMessage({ type: "entityAdd", payload: { entity } });
     redrawAll();
     return;
@@ -739,6 +865,7 @@ function finishDrag(e) {
       strokeWidth: currentWidth,
     };
     entities.set(entity.id, entity);
+    pushUndo({ type: "add", entities: [JSON.parse(JSON.stringify(entity))] });
     vscode.postMessage({ type: "entityAdd", payload: { entity } });
     redrawAll();
     return;
@@ -759,6 +886,7 @@ function finishDrag(e) {
       strokeWidth: currentWidth,
     };
     entities.set(entity.id, entity);
+    pushUndo({ type: "add", entities: [JSON.parse(JSON.stringify(entity))] });
     vscode.postMessage({ type: "entityAdd", payload: { entity } });
     redrawAll();
     return;
@@ -775,12 +903,18 @@ canvas.addEventListener("dblclick", e => {
   if (hitId) {
     const ent = entities.get(hitId);
     if (ent && ent.type === "text") {
+      const beforeText = ent.text, beforeW = ent.width, beforeH = ent.height;
       showTextInput(ent.x, ent.y, ent.text, ent.fontSize, ent.color, newText => {
         if (!newText) return;
         ent.text = newText;
         const m = measureText(newText, ent.fontSize);
         ent.width = m.w;
         ent.height = m.h;
+        if (newText !== beforeText) {
+          pushUndo({ type: "update", changes: [{ id: hitId,
+            before: { text: beforeText, width: beforeW, height: beforeH },
+            after:  { text: newText,   width: m.w,    height: m.h } }] });
+        }
         vscode.postMessage({ type: "entityUpdate", payload: { id: hitId, changes: { text: newText, width: m.w, height: m.h } } });
         redrawAll();
       });
@@ -790,6 +924,10 @@ canvas.addEventListener("dblclick", e => {
 
 // --- Delete / Clear ---
 document.getElementById("deleteBtn").addEventListener("click", () => {
+  const snapshot = [...selectedIds].map(id => entities.get(id)).filter(Boolean)
+    .map(ent => JSON.parse(JSON.stringify(ent)));
+  if (snapshot.length === 0) return;
+  pushUndo({ type: "delete", entities: snapshot });
   for (const id of [...selectedIds]) {
     entities.delete(id);
     vscode.postMessage({ type: "entityDelete", payload: { id } });
@@ -799,12 +937,16 @@ document.getElementById("deleteBtn").addEventListener("click", () => {
 });
 
 document.getElementById("clearBtn").addEventListener("click", () => {
+  const snapshot = [...entities.values()].map(ent => JSON.parse(JSON.stringify(ent)));
+  if (snapshot.length > 0) pushUndo({ type: "clear", entities: snapshot });
   entities.clear();
   selectedIds.clear();
   vscode.postMessage({ type: "clear" });
   redrawAll();
 });
 
+document.getElementById("undoBtn").addEventListener("click", applyUndo);
+document.getElementById("redoBtn").addEventListener("click", applyRedo);
 document.getElementById("saveBtn").addEventListener("click", savePng);
 
 function savePng() {
@@ -837,6 +979,16 @@ document.addEventListener("keydown", e => {
     savePng();
     return;
   }
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "z") {
+    e.preventDefault();
+    applyUndo();
+    return;
+  }
+  if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === "y" || (e.shiftKey && e.key.toLowerCase() === "z"))) {
+    e.preventDefault();
+    applyRedo();
+    return;
+  }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") {
     e.preventDefault();
     if (selectedIds.size > 0) {
@@ -853,6 +1005,7 @@ document.addEventListener("keydown", e => {
     if (!clipboard || clipboard.length === 0) return;
     pasteOffset += 16;
     const newIds = new Set();
+    const pastedSnapshots = [];
     for (const orig of clipboard) {
       const pasted = JSON.parse(JSON.stringify(orig));
       pasted.id = crypto.randomUUID();
@@ -866,8 +1019,10 @@ document.addEventListener("keydown", e => {
       }
       entities.set(pasted.id, pasted);
       newIds.add(pasted.id);
+      pastedSnapshots.push(JSON.parse(JSON.stringify(pasted)));
       vscode.postMessage({ type: "entityAdd", payload: { entity: pasted } });
     }
+    pushUndo({ type: "add", entities: pastedSnapshots });
     selectedIds = newIds;
     setTool("select");
     redrawAll();
@@ -882,6 +1037,9 @@ document.addEventListener("keydown", e => {
     case "t": setTool("text"); break;
   }
   if ((e.key === "Delete" || e.key === "Backspace") && selectedIds.size > 0) {
+    const snapshot = [...selectedIds].map(id => entities.get(id)).filter(Boolean)
+      .map(ent => JSON.parse(JSON.stringify(ent)));
+    if (snapshot.length > 0) pushUndo({ type: "delete", entities: snapshot });
     for (const id of [...selectedIds]) {
       entities.delete(id);
       vscode.postMessage({ type: "entityDelete", payload: { id } });
